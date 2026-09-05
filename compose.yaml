@@ -1,0 +1,21 @@
+# 修改时间：2026-09-06 | 文件说明：VaultAgent 本地 PostgreSQL + pgvector 开发环境 | edit by：Sliye
+# 每次重启 本地开发后都要先启动docker-compose up -d ，然后启动项目
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: vaultagent
+      POSTGRES_USER: vaultagent
+      POSTGRES_PASSWORD: vaultagent_dev
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - vaultagent_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vaultagent -d vaultagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  vaultagent_postgres:

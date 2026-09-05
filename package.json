@@ -2,6 +2,9 @@
   "name": "rag-agent",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,9 +12,20 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/mcp": "2.0.45",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@vercel/blob": "2.8.0",
+    "@workflow/world-postgres": "4.3.5",
+    "ai": "7.0.93",
+    "drizzle-orm": "0.45.2",
+    "exceljs": "4.4.0",
+    "mammoth": "1.12.2",
     "next": "16.3.4",
+    "postgres": "3.4.9",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "workflow": "4.8.5",
+    "zod": "4.3.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -23,5 +37,12 @@
     "tailwindcss": "^4",
     "typescript": "^5"
   },
-  "packageManager": "pnpm@10.11.1"
+  "packageManager": "pnpm@10.11.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "cbor-extract",
+      "esbuild"
+    ]
+  }
 }
