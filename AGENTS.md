@@ -32,10 +32,11 @@
 - 保持加载、空状态、失败、取消与键盘交互可用；不展示模型完整私密思维链。
 
 ## 文件结构与注释
+- 注释写中文吗，在文件中定义的变量 也要写注释说明他是干什么的例如 ：const EMBEDDING_BATCH_SIZE = 50;
 - 遵循 Next.js App Router 和现有项目约定，按职责组织，避免用“大厂规范”名义制造空目录或迁移工程。
 - `app/` 放路由与页面组合，`components/` 放界面组件，`lib/` 按 agent、retrieval、ingestion 等业务领域划分。
 - `workflows/` 放持久任务；领域逻辑复用，避免页面/API 文件承担所有职责或出现万能 utils 文件。
-- 每个新增或实质修改的自维护文件顶部标注：修改时间（YYYY-MM-DD）、文件说明、`edit by Sliye`。
+- 每个新增或实质修改的自维护文件顶部标注：修改时间（YYYY-MM-DD）、文件说明、`edit by 要写Sliye`。
 - 使用文件格式支持的注释；严格 JSON、二进制、锁文件和生成文件不强行插入头注释，不批量改第三方源码。
 - 函数前写简明说明，参数写注释，优先使用 JSDoc/TSDoc 的 `@param`；说明语义、单位与约束。
 - 复杂函数、关键算法、状态转换及副作用写清设计原因和边界；避免逐行翻译代码的冗余注释。
@@ -54,13 +55,3 @@
 - 使用项目现有包管理器与锁文件；不混用安装工具，不无故升级依赖。
 - 密钥仅存服务端，日志脱敏；不提交私人知识库、凭据或模型私密推理。
 - 完成后简述改动、实际验证及仍存在的限制，不运行与本次改动无关的检查。
-
-<!-- BEGIN:nextjs-agent-rules -->
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
