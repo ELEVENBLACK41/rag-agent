@@ -38,11 +38,16 @@ export async function POST(request: Request) {
   if (!upload.size || upload.size > MAX_MARKDOWN_BYTES) {
     return Response.json({ error: "Markdown must be between 1 byte and 10 MB." }, { status: 413 });
   }
-
+  /**
+   * 用户上传的md文档转换未字节数据，并创建一个本地的md导入记录
+   */
   const createdImport = await createLocalMarkdownImport(upload.name, new Uint8Array(await upload.arrayBuffer()));
 
   try {
     // https://useworkflow.dev/docs/api-reference/workflow-api/start 见官网详细说明
+    /**
+     * start()会对新的工作流运行进行队列并返回一个对象Run
+     */
     const run = await start(ingestMarkdownWorkflow, [createdImport.importId]);
     await setImportWorkflowRun(createdImport.importId, run.runId);
     return Response.json({ importId: createdImport.importId, status: "queued" }, { status: 202 });

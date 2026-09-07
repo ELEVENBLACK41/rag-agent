@@ -1,5 +1,7 @@
 /**
- * 修改时间：2026-09-06 | 文件说明：VaultAgent D2 Markdown 持久化导入工作流 | edit by：Sliye
+ * 修改时间：2026-09-06 | 文件说明：VaultAgent D2 Markdown 持久化导入工作流
+ * 此文件在route.ts中被调用，执行导入任务的核心逻辑
+ *  | edit by：Sliye
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -29,9 +31,13 @@ export async function ingestMarkdownWorkflow(importId: string) {
   "use workflow";
 
   try {
+    //把导入记录状态改为“执行中”
     await markImportRunning(importId);
+    //解析 Markdown 文件，并把内容切成多个文本块保存
     await parseAndStoreChunks(importId);
+    //为文本块生成向量，并返回成功生成向量的数量
     const embeddedChunkCount = await embedStoredChunks(importId);
+    //导入完成后，把结果发布或标记为可用
     await publishImport(importId);
     return { embeddedChunkCount };
   } catch (error) {
