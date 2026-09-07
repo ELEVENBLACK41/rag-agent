@@ -1,8 +1,9 @@
 /**
- * 修改时间：2026-09-06 | 文件说明：VaultAgent 本地 Markdown 导入 API | edit by：Sliye
+ * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 Markdown 导入 API | edit by：Sliye
  */
 
 import { start } from "workflow/api";
+import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
 import {
   createLocalMarkdownImport,
   recordImportDispatchError,
@@ -21,8 +22,8 @@ const MAX_MARKDOWN_BYTES = 10 * 1024 * 1024;
  * @param request 仅接受 multipart/form-data 的 HTTP 请求。
  */
 export async function POST(request: Request) {
-  if ((process.env.APP_MODE ?? "local") !== "local") {
-    return Response.json({ error: "This D2 import endpoint is local-mode only." }, { status: 403 });
+  if (!canAccessD3LocalFeature(request)) {
+    return Response.json({ error: "Markdown import is unavailable in this deployment mode." }, { status: 403 });
   }
 
   const formData = await request.formData();

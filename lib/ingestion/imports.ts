@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-06 | 文件说明：VaultAgent 本地 Markdown 导入任务创建 | edit by：Sliye
+ * 修改时间：2026-09-07 | 文件说明：VaultAgent D2-D3 Markdown 导入任务创建与删除 | edit by：Sliye
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -13,19 +13,19 @@ import {
   principals,
   workspaces,
 } from "@/lib/db/schema";
-import { createStorageKey, writeLocalFile } from "@/lib/storage/local";
+import { createStorageKey, deleteStoredFile, writeStoredFile } from "@/lib/storage/files";
 
 /** 本地开发模式下唯一的工作区标识。 */
-const LOCAL_WORKSPACE_ID = "local-default-workspace";
+export const LOCAL_WORKSPACE_ID = "local-default-workspace";
 /** 本地开发模式下唯一的所有者标识。 */
-const LOCAL_OWNER_ID = "local-owner";
+export const LOCAL_OWNER_ID = "local-owner";
 
 export type CreatedImport = {
   importId: string;
 };
 
 /** 在不暴露公开多租户入口的前提下，创建本地唯一工作区和所有者身份。 */
-async function ensureLocalPrincipal() {
+export async function ensureLocalPrincipal() {
   const db = getDatabase();
 
   await db.insert(workspaces).values({ id: LOCAL_WORKSPACE_ID, mode: "local" }).onConflictDoNothing();
@@ -86,13 +86,77 @@ export async function createLocalMarkdownImport(
   });
 
   try {
-    await writeLocalFile(storageKey, bytes);
+    await writeStoredFile(storageKey, bytes);
   } catch (error) {
     await markImportStorageFailed(importId, fileVersionId);
     throw error;
   }
 
   return { importId };
+}
+
+/**
+ * 读取导入的最小状态，浏览器轮询时不返回原始文件内容。
+ *
+ * @param importId 导入任务标识。
+ */
+export async function getLocalImportStatus(importId: string) {
+  const [importRecord] = await getDatabase()
+    .select({
+      id: imports.id,
+      status: imports.status,
+      errorMessage: imports.errorMessage,
+      completedAt: imports.completedAt,
+    })
+    .from(imports)
+    .where(eq(imports.id, importId))
+    .limit(1);
+
+  return importRecord ?? null;
+}
+
+/**
+ * 删除原始文件并撤销其索引快照，使后续检索不能再读取该文件内容。
+ *
+ * @param importId 导入任务标识。
+ */
+export async function deleteLocalImport(importId: string) {
+  const db = getDatabase();
+  const [importRecord] = await db
+    .select({
+      fileVersionId: imports.fileVersionId,
+      snapshotId: imports.snapshotId,
+      logicalFileId: fileVersions.logicalFileId,
+      storageKey: fileVersions.storageKey,
+    })
+    .from(imports)
+    .innerJoin(fileVersions, eq(imports.fileVersionId, fileVersions.id))
+    .where(eq(imports.id, importId))
+    .limit(1);
+
+  if (!importRecord) return false;
+
+  await deleteStoredFile(importRecord.storageKey);
+  await db.transaction(async (transaction) => {
+    await transaction
+      .update(indexSnapshots)
+      .set({ status: "deleted" })
+      .where(eq(indexSnapshots.id, importRecord.snapshotId));
+    await transaction
+      .update(fileVersions)
+      .set({ status: "deleted" })
+      .where(eq(fileVersions.id, importRecord.fileVersionId));
+    await transaction
+      .update(logicalFiles)
+      .set({ deletedAt: new Date() })
+      .where(eq(logicalFiles.id, importRecord.logicalFileId));
+    await transaction
+      .update(imports)
+      .set({ status: "deleted", completedAt: new Date() })
+      .where(eq(imports.id, importId));
+  });
+
+  return true;
 }
 
 /**

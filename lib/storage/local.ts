@@ -1,8 +1,8 @@
 /**
- * 修改时间：2026-09-06 | 文件说明：VaultAgent 本地私有文件存储 | edit by：Sliye
+ * 修改时间：2026-09-07 | 文件说明：VaultAgent 本地私有文件存储 | edit by：Sliye
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** 在不把上传文件名当作路径的前提下，解析本地私有数据目录。 */
@@ -61,4 +61,19 @@ export async function readLocalFile(storageKey: string) {
   const target = resolveStoragePath(storageKey);
 
   return readFile(/* turbopackIgnore: true */ target);
+}
+
+/**
+ * 删除本地私有文件。文件已不存在时视为删除成功，保证删除请求可重试。
+ *
+ * @param storageKey 由服务器生成的相对存储键。
+ */
+export async function deleteLocalFile(storageKey: string) {
+  try {
+    await rm(resolveStoragePath(storageKey));
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
 }

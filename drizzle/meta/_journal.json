@@ -8,6 +8,13 @@
       "when": 1788680154794,
       "tag": "0000_bumpy_cyclops",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788781997304,
+      "tag": "0001_wonderful_adam_warlock",
+      "breakpoints": true
     }
   ]
 }

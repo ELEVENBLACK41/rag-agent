@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-06 | 文件说明：VaultAgent D2 核心业务数据表定义 | edit by：Sliye
+ * 修改时间：2026-09-07 | 文件说明：VaultAgent D2-D3 核心业务数据表定义 | edit by：Sliye
  */
 
 import {
@@ -159,6 +159,29 @@ export const conversations = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (table) => [index("conversations_workspace_id_idx").on(table.workspaceId)],
+);
+
+/**
+ * 对话消息与 Run 分离保存。助手消息的 citations 保存真实 Chunk 定位信息，供引用抽屉在后续阶段扩展。
+ */
+export const messages = pgTable(
+  "messages",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    conversationId: varchar("conversation_id", { length: 64 })
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    runId: varchar("run_id", { length: 64 }),
+    role: varchar("role", { length: 16 }).notNull(),
+    content: text("content").notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    citations: jsonb("citations").notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("messages_conversation_id_idx").on(table.conversationId),
+    index("messages_run_id_idx").on(table.runId),
+  ],
 );
 
 export const runs = pgTable(

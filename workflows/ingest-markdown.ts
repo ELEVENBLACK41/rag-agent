@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-06 | 文件说明：VaultAgent D2 Markdown 持久化导入工作流
+ * 修改时间：2026-09-07 | 文件说明：VaultAgent D2-D3 Markdown 持久化导入工作流
  * 此文件在route.ts中被调用，执行导入任务的核心逻辑
  *  | edit by：Sliye
  */
@@ -11,7 +11,7 @@ import { FatalError } from "workflow";
 import { getDatabase } from "@/lib/db/client";
 import { chunks, fileVersions, imports, indexSnapshots } from "@/lib/db/schema";
 import { chunkMarkdown } from "@/lib/ingestion/markdown";
-import { readLocalFile } from "@/lib/storage/local";
+import { readStoredFile } from "@/lib/storage/files";
 
 /** 经过 DAY1 验证的 Gateway 向量模型。 */
 const EMBEDDING_MODEL = "alibaba/qwen3-embedding-0.6b";
@@ -85,7 +85,7 @@ async function parseAndStoreChunks(importId: string) {
 
   let fileBytes: Uint8Array;
   try {
-    fileBytes = await readLocalFile(importRecord.storageKey);
+    fileBytes = await readStoredFile(importRecord.storageKey);
   } catch {
     throw new FatalError("The uploaded Markdown file cannot be read.");
   }
