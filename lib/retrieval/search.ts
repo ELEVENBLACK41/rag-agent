@@ -53,13 +53,15 @@ export async function getLatestPublishedSnapshot(workspaceId: string) {
  * @param question 用户提交的问题，最多 4,000 个字符。
  */
 export async function retrievePublishedChunks(snapshotId: string, question: string) {
+
+  // 检测有没有配置 AI_GATEWAY_API_KEY
   if (!process.env.AI_GATEWAY_API_KEY) {
     throw new Error("AI_GATEWAY_API_KEY is required before querying the knowledge base.");
   }
 
   const { embedding } = await embed({
-    model: gateway.embeddingModel(EMBEDDING_MODEL),
-    value: question,
+    model: gateway.embeddingModel(EMBEDDING_MODEL), // 使用 Gateway Embedding 模型
+    value: question, // 用户问题文本,用户的问题文本只向量化一次，所以不会用到embedMany
   });
   if (
     embedding.length !== EMBEDDING_DIMENSIONS ||
@@ -67,30 +69,38 @@ export async function retrievePublishedChunks(snapshotId: string, question: stri
   ) {
     throw new Error("Gateway returned an invalid query embedding.");
   }
+  /**
+   * 计算查询向量与数据库中存储的向量的余弦距离，并返回最相似的文本块
+   * @param chunks.embedding 是数据库中存储的向量
+   * @param embedding 是用户问题生成的向量
+   * chunks.embedding <=> $1 是Drizzle对pgvector的封装，$1 就是用户问题的向量
+   * 余弦据的特点就是距离越小，越相似，距离越大越不相似
+   */
+  const distance = cosineDistance(chunks.embedding, embedding);//这个是距离
 
-  const distance = cosineDistance(chunks.embedding, embedding);
+  //构造函数，并置顶返回哪些字段
   const rows = await getDatabase()
     .select({
-      chunkId: chunks.id,
-      content: chunks.content,
-      displayName: logicalFiles.displayName,
-      startLine: chunks.startLine,
+      chunkId: chunks.id, //文本块 ID
+      content: chunks.content, //文本块正文，这部分最终会作为上下文传给大模型
+      displayName: logicalFiles.displayName,//原始文件名
+      startLine: chunks.startLine,//记录文本块在原文件中的行号范围
       endLine: chunks.endLine,
-      similarity: sql<number>`1 - (${distance})`,
+      similarity: sql<number>`1 - (${distance})`, //相似度 = 1 - 余弦距离
     })
-    .from(chunks)
-    .innerJoin(fileVersions, eq(chunks.fileVersionId, fileVersions.id))
-    .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
+    .from(chunks) //查询的主表是 chunks
+    .innerJoin(fileVersions, eq(chunks.fileVersionId, fileVersions.id)) //连接文件版本表
+    .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))//连接逻辑文件表
     .where(
       and(
-        eq(chunks.snapshotId, snapshotId),
+        eq(chunks.snapshotId, snapshotId),  //eq表示等于，查询条件是 chunks.snapshotId 等于传入的 snapshotId
         isNotNull(chunks.embedding),
         eq(fileVersions.status, "indexed"),
         isNull(logicalFiles.deletedAt),
       ),
     )
-    .orderBy(distance)
-    .limit(RETRIEVAL_LIMIT);
+    .orderBy(distance)//按距离升序排列，距离越小，相似度越高
+    .limit(RETRIEVAL_LIMIT); //前六个
 
   return rows.map((row) => ({ ...row, similarity: Number(row.similarity) }));
 }

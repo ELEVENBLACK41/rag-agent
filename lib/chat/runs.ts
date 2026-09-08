@@ -1,5 +1,14 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 单轮检索问答 Run 与事件持久化 | edit by：Sliye
+ * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 单轮检索问答 Run 与事件持久化
+ * 此文件为一次问答的执行核心编排文件，结合 lib/retrieval/search.ts 进行检索，并结合 ai-sdk-core 进行模型生成回答
+ * 主要负责：
+ * 创建单轮问答 Run
+ * 固定本次问答使用的知识库快照
+ * 调用向量检索
+ * 将回答锃亮推送给浏览器
+ * 持久化消息，引用，和执行事件
+ * 处理失败，短线，会话删除
+ *  | edit by：Sliye
  */
 
 import { randomUUID } from "node:crypto";
@@ -21,6 +30,7 @@ const MAX_OUTPUT_TOKENS = 1_200;
 /** 文本增量写入事件库的最短时间窗口，避免逐 token 写库。 */
 const EVENT_FLUSH_INTERVAL_MS = 300;
 
+// 给前端展示的引用信息
 export type ChatCitation = {
   id: number;
   chunkId: string;
@@ -29,16 +39,17 @@ export type ChatCitation = {
   endLine: number;
 };
 
+// 一次问答执行的身份信息
 export type ChatRun = {
   conversationId: string;
   runId: string;
-  snapshotId: string;
+  snapshotId: string; //本次问答使用哪个知识库快照
 };
-
+// 推送给浏览器的事件类型
 export type ChatStreamEvent =
-  | { type: "stage"; data: { message: string } }
-  | { type: "delta"; data: { text: string } }
-  | { type: "complete"; data: { citations: ChatCitation[] } };
+  | { type: "stage"; data: { message: string } } //阶段消息 例如 ：正在检索已发布的知识库快照
+  | { type: "delta"; data: { text: string } } //文本增量
+  | { type: "complete"; data: { citations: ChatCitation[] } }; //完成事件，包含引用信息
 
 /**
  * 创建单轮问答 Run，开始后始终固定在当前已发布快照上。
@@ -52,8 +63,10 @@ export async function createChatRun(question: string, conversationId?: string): 
 
   const db = getDatabase();
   const runId = randomUUID();
+  //如果前端传了 conversationId 就使用前端传的，如果没有就生成一个新的就是新绘画
   const resolvedConversationId = conversationId ?? randomUUID();
 
+  //验证会话是否有效，验证会话ID是否存在，是否属于当前工作区，是否未被删除
   if (conversationId) {
     const [conversation] = await db
       .select({ id: conversations.id })
@@ -69,20 +82,25 @@ export async function createChatRun(question: string, conversationId?: string): 
     if (!conversation) throw new Error("目标会话不存在或已经删除。");
   }
 
+  //使用事务同时写入四类数据
   await db.transaction(async (transaction) => {
+    //如果没有传入 conversationId 就创建一个新的会话
     if (!conversationId) {
       await transaction.insert(conversations).values({
         id: resolvedConversationId,
         workspaceId: LOCAL_WORKSPACE_ID,
-        title: makeConversationTitle(question),
+        title: makeConversationTitle(question),//标题通过问题直接生成 暂时这样 后续可能会接入一个模型生成
       });
     }
+    //创建运行记录
     await transaction.insert(runs).values({
       id: runId,
       conversationId: resolvedConversationId,
       snapshotId: snapshot.id,
       status: "running",
     });
+
+    //保存用户消息
     await transaction.insert(messages).values({
       id: randomUUID(),
       conversationId: resolvedConversationId,
@@ -92,12 +110,13 @@ export async function createChatRun(question: string, conversationId?: string): 
       status: "completed",
       citations: [],
     });
+    //写入开始事件
     await transaction.insert(runEvents).values({
       id: randomUUID(),
       runId,
       sequence: 1,
       eventType: "run_started",
-      payload: { message: "开始检索当前知识库。" },
+      payload: { message: "正在检索当前知识库" },
     });
   });
 
