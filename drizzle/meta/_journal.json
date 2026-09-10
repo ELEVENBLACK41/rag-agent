@@ -15,6 +15,20 @@
       "when": 1788781997304,
       "tag": "0001_wonderful_adam_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789023481264,
+      "tag": "0002_grey_revanche",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789023770911,
+      "tag": "0003_melted_punisher",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,10 @@
  */
 
 import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
-import { deleteLocalImport, getLocalImportStatus } from "@/lib/ingestion/imports";
+import {
+  deleteLocalImport,
+  getLocalImportBatchStatus,
+} from "@/lib/ingestion/imports";
 
 export const runtime = "nodejs";
 
@@ -18,12 +21,16 @@ export async function GET(
   context: { params: Promise<{ importId: string }> },
 ) {
   if (!canAccessD3LocalFeature(request)) {
-    return Response.json({ error: "Import status is unavailable in this deployment mode." }, { status: 403 });
+    return Response.json(
+      { error: "Import status is unavailable in this deployment mode." },
+      { status: 403 },
+    );
   }
 
   const { importId } = await context.params;
-  const importRecord = await getLocalImportStatus(importId);
-  if (!importRecord) return Response.json({ error: "Import not found." }, { status: 404 });
+  const importRecord = await getLocalImportBatchStatus(importId);
+  if (!importRecord)
+    return Response.json({ error: "Import batch not found." }, { status: 404 });
 
   return Response.json(importRecord);
 }
@@ -39,12 +46,16 @@ export async function DELETE(
   context: { params: Promise<{ importId: string }> },
 ) {
   if (!canAccessD3LocalFeature(request)) {
-    return Response.json({ error: "Import deletion is unavailable in this deployment mode." }, { status: 403 });
+    return Response.json(
+      { error: "Import deletion is unavailable in this deployment mode." },
+      { status: 403 },
+    );
   }
 
   const { importId } = await context.params;
   const deleted = await deleteLocalImport(importId);
-  if (!deleted) return Response.json({ error: "Import not found." }, { status: 404 });
+  if (!deleted)
+    return Response.json({ error: "Import not found." }, { status: 404 });
 
   return Response.json({ importId, status: "deleted" });
 }

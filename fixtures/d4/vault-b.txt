@@ -1,0 +1,3 @@
+VaultAgent D4 第二份无敏感回归资料。
+
+用于验证 TXT 与 Markdown 在同一个候选快照中共同参与检索。

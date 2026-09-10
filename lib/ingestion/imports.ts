@@ -1,131 +1,222 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D2-D3 Markdown 导入任务创建与删除 | edit by：Sliye
+ * 修改时间：2026-09-10 | 文件说明：VaultAgent D4 多文件导入批次、版本与快照发布 | edit by：Sliye
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, notInArray } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import {
   fileVersions,
+  importBatches,
   imports,
+  indexSnapshotFiles,
   indexSnapshots,
   logicalFiles,
   principals,
   workspaces,
 } from "@/lib/db/schema";
-import { createStorageKey, deleteStoredFile, writeStoredFile } from "@/lib/storage/files";
+import {
+  createStorageKey,
+  deleteStoredFile,
+  writeStoredFile,
+} from "@/lib/storage/files";
 
 /** 本地开发模式下唯一的工作区标识。 */
 export const LOCAL_WORKSPACE_ID = "local-default-workspace";
 /** 本地开发模式下唯一的所有者标识。 */
 export const LOCAL_OWNER_ID = "local-owner";
 
-export type CreatedImport = {
+export type VaultUploadFile = {
+  relativePath: string;
+  bytes: Uint8Array;
+  mediaType: string;
+  kind: "index" | "attachment";
+};
+
+type PendingStoredFile = {
   importId: string;
+  fileVersionId: string;
+  storageKey: string;
+  bytes: Uint8Array;
 };
 
 /** 在不暴露公开多租户入口的前提下，创建本地唯一工作区和所有者身份。 */
 export async function ensureLocalPrincipal() {
   const db = getDatabase();
-
-  await db.insert(workspaces).values({ id: LOCAL_WORKSPACE_ID, mode: "local" }).onConflictDoNothing();
+  await db
+    .insert(workspaces)
+    .values({ id: LOCAL_WORKSPACE_ID, mode: "local" })
+    .onConflictDoNothing();
   await db
     .insert(principals)
-    .values({ id: LOCAL_OWNER_ID, workspaceId: LOCAL_WORKSPACE_ID, kind: "owner" })
+    .values({
+      id: LOCAL_OWNER_ID,
+      workspaceId: LOCAL_WORKSPACE_ID,
+      kind: "owner",
+    })
     .onConflictDoNothing();
 }
 
 /**
- * 保存原始 Markdown、不可变版本记录和待执行导入任务。
+ * 将一个受校验的文件批次保存为候选快照；文本文件待 Workflow 索引，图片附件只保留原始文件和路径。
  *
- * @param fileName 已校验扩展名的显示文件名。
- * @param bytes 已接收的原始 Markdown 字节。
+ * @param files 已通过上传入口类型、路径和总量校验的文件。
  */
-export async function createLocalMarkdownImport(
-  fileName: string,
-  bytes: Uint8Array,
-): Promise<CreatedImport> {
+export async function createLocalImportBatch(files: VaultUploadFile[]) {
   await ensureLocalPrincipal();
-
   const db = getDatabase();
-  const logicalFileId = randomUUID();
-  const fileVersionId = randomUUID();
+  const batchId = randomUUID();
   const snapshotId = randomUUID();
-  const importId = randomUUID();
-  const storageKey = createStorageKey(LOCAL_WORKSPACE_ID, fileVersionId);
-  const contentHash = createHash("sha256").update(bytes).digest("hex");
+  const pendingFiles: PendingStoredFile[] = [];
 
   await db.transaction(async (transaction) => {
-    await transaction.insert(logicalFiles).values({
-      id: logicalFileId,
-      workspaceId: LOCAL_WORKSPACE_ID,
-      displayName: fileName,
-    });
-    await transaction.insert(fileVersions).values({
-      id: fileVersionId,
-      logicalFileId,
-      versionNumber: 1,
-      contentHash,
-      mediaType: "text/markdown",
-      byteSize: bytes.byteLength,
-      storageKey,
-      status: "queued",
-    });
     await transaction.insert(indexSnapshots).values({
       id: snapshotId,
       workspaceId: LOCAL_WORKSPACE_ID,
       status: "building",
     });
-    await transaction.insert(imports).values({
-      id: importId,
+    await transaction.insert(importBatches).values({
+      id: batchId,
       workspaceId: LOCAL_WORKSPACE_ID,
-      fileVersionId,
       snapshotId,
       status: "queued",
     });
+
+    for (const file of files) {
+      const [existingFile] = await transaction
+        .select({ id: logicalFiles.id })
+        .from(logicalFiles)
+        .where(
+          and(
+            eq(logicalFiles.workspaceId, LOCAL_WORKSPACE_ID),
+            eq(logicalFiles.sourcePath, file.relativePath),
+          ),
+        )
+        .limit(1);
+      const logicalFileId = existingFile?.id ?? randomUUID();
+      const displayName =
+        file.relativePath.split("/").at(-1) ?? file.relativePath;
+
+      if (existingFile) {
+        await transaction
+          .update(logicalFiles)
+          .set({ displayName, deletedAt: null })
+          .where(eq(logicalFiles.id, logicalFileId));
+      } else {
+        await transaction.insert(logicalFiles).values({
+          id: logicalFileId,
+          workspaceId: LOCAL_WORKSPACE_ID,
+          displayName,
+          sourcePath: file.relativePath,
+        });
+      }
+
+      const [latestVersion] = await transaction
+        .select({ versionNumber: fileVersions.versionNumber })
+        .from(fileVersions)
+        .where(eq(fileVersions.logicalFileId, logicalFileId))
+        .orderBy(desc(fileVersions.versionNumber))
+        .limit(1);
+      const fileVersionId = randomUUID();
+      const importId = randomUUID();
+      const storageKey = createStorageKey(LOCAL_WORKSPACE_ID, fileVersionId);
+
+      await transaction.insert(fileVersions).values({
+        id: fileVersionId,
+        logicalFileId,
+        versionNumber: (latestVersion?.versionNumber ?? 0) + 1,
+        contentHash: createHash("sha256").update(file.bytes).digest("hex"),
+        mediaType: file.mediaType,
+        byteSize: file.bytes.byteLength,
+        storageKey,
+        status: file.kind === "index" ? "queued" : "stored",
+      });
+      await transaction.insert(imports).values({
+        id: importId,
+        workspaceId: LOCAL_WORKSPACE_ID,
+        fileVersionId,
+        snapshotId,
+        batchId,
+        status: file.kind === "index" ? "queued" : "ready",
+      });
+      pendingFiles.push({
+        importId,
+        fileVersionId,
+        storageKey,
+        bytes: file.bytes,
+      });
+    }
   });
 
   try {
-    await writeStoredFile(storageKey, bytes);
+    for (const file of pendingFiles)
+      await writeStoredFile(file.storageKey, file.bytes);
   } catch (error) {
-    await markImportStorageFailed(importId, fileVersionId);
+    await markBatchStorageFailed(batchId);
     throw error;
   }
 
-  return { importId };
+  return { batchId, snapshotId };
 }
 
-/**
- * 读取导入的最小状态，浏览器轮询时不返回原始文件内容。
- *
- * @param importId 导入任务标识。
- */
-export async function getLocalImportStatus(importId: string) {
-  const [importRecord] = await getDatabase()
+/** 读取一个批次的浏览器展示状态，不返回原始文件内容。 */
+export async function getLocalImportBatchStatus(batchId: string) {
+  const db = getDatabase();
+  const [batch] = await db
+    .select({
+      id: importBatches.id,
+      status: importBatches.status,
+      errorMessage: importBatches.errorMessage,
+    })
+    .from(importBatches)
+    .where(eq(importBatches.id, batchId))
+    .limit(1);
+  if (!batch) return null;
+
+  const files = await db
     .select({
       id: imports.id,
       status: imports.status,
       errorMessage: imports.errorMessage,
-      completedAt: imports.completedAt,
+      displayName: logicalFiles.displayName,
+      sourcePath: logicalFiles.sourcePath,
+      mediaType: fileVersions.mediaType,
     })
     .from(imports)
-    .where(eq(imports.id, importId))
-    .limit(1);
+    .innerJoin(fileVersions, eq(imports.fileVersionId, fileVersions.id))
+    .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
+    .where(eq(imports.batchId, batchId));
 
-  return importRecord ?? null;
+  return { ...batch, files };
+}
+
+/** 关联已启动的持久化 Workflow Run。 */
+export async function setImportBatchWorkflowRun(
+  batchId: string,
+  workflowRunId: string,
+) {
+  await getDatabase()
+    .update(importBatches)
+    .set({ workflowRunId })
+    .where(eq(importBatches.id, batchId));
+}
+
+/** 调度未成功时使批次及其未完成文件显式失败。 */
+export async function recordImportBatchDispatchError(batchId: string) {
+  await markBatchFailed(batchId, "Workflow dispatch failed.");
 }
 
 /**
- * 删除原始文件并撤销其索引快照，使后续检索不能再读取该文件内容。
+ * 删除一个逻辑文件并发布排除该文件的新快照，旧快照继续作为历史 Run 的证据。
  *
- * @param importId 导入任务标识。
+ * @param importId 当前文件的导入记录标识。
  */
 export async function deleteLocalImport(importId: string) {
   const db = getDatabase();
-  const [importRecord] = await db
+  const [target] = await db
     .select({
+      workspaceId: imports.workspaceId,
       fileVersionId: imports.fileVersionId,
-      snapshotId: imports.snapshotId,
       logicalFileId: fileVersions.logicalFileId,
       storageKey: fileVersions.storageKey,
     })
@@ -133,80 +224,238 @@ export async function deleteLocalImport(importId: string) {
     .innerJoin(fileVersions, eq(imports.fileVersionId, fileVersions.id))
     .where(eq(imports.id, importId))
     .limit(1);
+  if (!target) return false;
 
-  if (!importRecord) return false;
+  await deleteStoredFile(target.storageKey);
+  const [currentSnapshot] = await db
+    .select({ id: indexSnapshots.id })
+    .from(indexSnapshots)
+    .where(
+      and(
+        eq(indexSnapshots.workspaceId, target.workspaceId),
+        eq(indexSnapshots.status, "published"),
+      ),
+    )
+    .orderBy(desc(indexSnapshots.publishedAt))
+    .limit(1);
 
-  await deleteStoredFile(importRecord.storageKey);
   await db.transaction(async (transaction) => {
-    await transaction
-      .update(indexSnapshots)
-      .set({ status: "deleted" })
-      .where(eq(indexSnapshots.id, importRecord.snapshotId));
     await transaction
       .update(fileVersions)
       .set({ status: "deleted" })
-      .where(eq(fileVersions.id, importRecord.fileVersionId));
+      .where(eq(fileVersions.id, target.fileVersionId));
     await transaction
       .update(logicalFiles)
       .set({ deletedAt: new Date() })
-      .where(eq(logicalFiles.id, importRecord.logicalFileId));
+      .where(eq(logicalFiles.id, target.logicalFileId));
     await transaction
       .update(imports)
       .set({ status: "deleted", completedAt: new Date() })
       .where(eq(imports.id, importId));
-  });
+    if (!currentSnapshot) return;
 
+    const nextSnapshotId = randomUUID();
+    const remaining = await transaction
+      .select({ fileVersionId: indexSnapshotFiles.fileVersionId })
+      .from(indexSnapshotFiles)
+      .innerJoin(
+        fileVersions,
+        eq(indexSnapshotFiles.fileVersionId, fileVersions.id),
+      )
+      .where(
+        and(
+          eq(indexSnapshotFiles.snapshotId, currentSnapshot.id),
+          ne(fileVersions.logicalFileId, target.logicalFileId),
+        ),
+      );
+    await transaction.insert(indexSnapshots).values({
+      id: nextSnapshotId,
+      workspaceId: target.workspaceId,
+      status: "published",
+      publishedAt: new Date(),
+    });
+    if (remaining.length) {
+      await transaction
+        .insert(indexSnapshotFiles)
+        .values(
+          remaining.map((item) => ({
+            snapshotId: nextSnapshotId,
+            fileVersionId: item.fileVersionId,
+          })),
+        );
+    }
+  });
   return true;
 }
 
-/**
- * 在原始文件无法写入时保留失败记录，避免留下看似可执行的导入任务。
- *
- * @param importId 导入任务标识。
- * @param fileVersionId 文件版本标识。
- */
-async function markImportStorageFailed(importId: string, fileVersionId: string) {
-  await getDatabase().transaction(async (transaction) => {
+/** 供 Workflow 读取本批次待索引的 Markdown/TXT 文件。 */
+export async function getBatchTextImports(batchId: string) {
+  return getDatabase()
+    .select({ id: imports.id })
+    .from(imports)
+    .innerJoin(fileVersions, eq(imports.fileVersionId, fileVersions.id))
+    .where(
+      and(
+        eq(imports.batchId, batchId),
+        inArray(fileVersions.mediaType, ["text/markdown", "text/plain"]),
+      ),
+    );
+}
+
+/** 批次完成后将旧快照成员与本批次的新版本合并，并作为一个事务发布。 */
+export async function publishImportBatch(batchId: string) {
+  const db = getDatabase();
+  const [batch] = await db
+    .select({
+      workspaceId: importBatches.workspaceId,
+      snapshotId: importBatches.snapshotId,
+    })
+    .from(importBatches)
+    .where(eq(importBatches.id, batchId))
+    .limit(1);
+  if (!batch) throw new Error("Import batch does not exist.");
+
+  await db.transaction(async (transaction) => {
+    const batchFiles = await transaction
+      .select({
+        fileVersionId: imports.fileVersionId,
+        logicalFileId: fileVersions.logicalFileId,
+        mediaType: fileVersions.mediaType,
+      })
+      .from(imports)
+      .innerJoin(fileVersions, eq(imports.fileVersionId, fileVersions.id))
+      .where(eq(imports.batchId, batchId));
+    const unfinished = await transaction
+      .select({ id: imports.id })
+      .from(imports)
+      .where(and(eq(imports.batchId, batchId), ne(imports.status, "ready")));
+    if (unfinished.length)
+      throw new Error("Import batch still has unfinished files.");
+
+    const [previous] = await transaction
+      .select({ id: indexSnapshots.id })
+      .from(indexSnapshots)
+      .where(
+        and(
+          eq(indexSnapshots.workspaceId, batch.workspaceId),
+          eq(indexSnapshots.status, "published"),
+        ),
+      )
+      .orderBy(desc(indexSnapshots.publishedAt))
+      .limit(1);
+    const replacedLogicalFileIds = batchFiles.map((file) => file.logicalFileId);
+    const inherited = previous
+      ? await transaction
+          .select({ fileVersionId: indexSnapshotFiles.fileVersionId })
+          .from(indexSnapshotFiles)
+          .innerJoin(
+            fileVersions,
+            eq(indexSnapshotFiles.fileVersionId, fileVersions.id),
+          )
+          .where(
+            replacedLogicalFileIds.length
+              ? and(
+                  eq(indexSnapshotFiles.snapshotId, previous.id),
+                  notInArray(
+                    fileVersions.logicalFileId,
+                    replacedLogicalFileIds,
+                  ),
+                )
+              : eq(indexSnapshotFiles.snapshotId, previous.id),
+          )
+      : [];
+    const inheritedIds = new Set(inherited.map((file) => file.fileVersionId));
+    const nextFileVersionIds = [
+      ...inheritedIds,
+      ...batchFiles.map((file) => file.fileVersionId),
+    ];
+
+    if (nextFileVersionIds.length) {
+      await transaction
+        .insert(indexSnapshotFiles)
+        .values(
+          nextFileVersionIds.map((fileVersionId) => ({
+            snapshotId: batch.snapshotId,
+            fileVersionId,
+          })),
+        );
+    }
+    const indexedFileVersionIds = batchFiles
+      .filter(
+        (file) =>
+          file.mediaType === "text/markdown" || file.mediaType === "text/plain",
+      )
+      .map((file) => file.fileVersionId);
+    if (indexedFileVersionIds.length) {
+      await transaction
+        .update(fileVersions)
+        .set({ status: "indexed" })
+        .where(inArray(fileVersions.id, indexedFileVersionIds));
+    }
     await transaction
-      .update(fileVersions)
-      .set({ status: "failed" })
-      .where(eq(fileVersions.id, fileVersionId));
+      .update(imports)
+      .set({ status: "completed", completedAt: new Date(), errorMessage: null })
+      .where(eq(imports.batchId, batchId));
+    await transaction
+      .update(indexSnapshots)
+      .set({ status: "published", publishedAt: new Date() })
+      .where(eq(indexSnapshots.id, batch.snapshotId));
+    await transaction
+      .update(importBatches)
+      .set({ status: "completed", completedAt: new Date(), errorMessage: null })
+      .where(eq(importBatches.id, batchId));
+  });
+}
+
+/** 供 Workflow 将已经成功向量化的文本文件标记为候选快照就绪。 */
+export async function markImportReady(importId: string) {
+  await getDatabase()
+    .update(imports)
+    .set({ status: "ready", errorMessage: null })
+    .where(eq(imports.id, importId));
+}
+
+/** Workflow 启动时更新批次和所有待执行文件状态。 */
+export async function markImportBatchRunning(batchId: string) {
+  const db = getDatabase();
+  await db.transaction(async (transaction) => {
+    await transaction
+      .update(importBatches)
+      .set({ status: "running", errorMessage: null })
+      .where(eq(importBatches.id, batchId));
+    await transaction
+      .update(imports)
+      .set({ status: "running", errorMessage: null })
+      .where(and(eq(imports.batchId, batchId), eq(imports.status, "queued")));
+  });
+}
+
+/** 记录候选批次失败，不改变当前已经发布的快照。 */
+export async function markBatchFailed(batchId: string, message: string) {
+  const db = getDatabase();
+  await db.transaction(async (transaction) => {
+    await transaction
+      .update(importBatches)
+      .set({
+        status: "failed",
+        errorMessage: message.slice(0, 1_000),
+        completedAt: new Date(),
+      })
+      .where(eq(importBatches.id, batchId));
     await transaction
       .update(imports)
       .set({
         status: "failed",
-        errorMessage: "Failed to store the uploaded file.",
+        errorMessage: message.slice(0, 1_000),
         completedAt: new Date(),
       })
-      .where(eq(imports.id, importId));
+      .where(
+        and(eq(imports.batchId, batchId), ne(imports.status, "completed")),
+      );
   });
 }
 
-/**
- * 在成功调度后关联持久化 Workflow Run 标识。
- *
- * @param importId 导入任务标识。
- * @param workflowRunId Workflow SDK 返回的 Run 标识。
- */
-export async function setImportWorkflowRun(importId: string, workflowRunId: string) {
-  await getDatabase()
-    .update(imports)
-    .set({ workflowRunId })
-    .where(eq(imports.id, importId));
-}
-
-/**
- * 记录调度失败，使任务状态可见且不删除用户数据。
- *
- * @param importId 导入任务标识。
- */
-export async function recordImportDispatchError(importId: string) {
-  await getDatabase()
-    .update(imports)
-    .set({
-      status: "failed",
-      errorMessage: "Workflow dispatch failed.",
-      completedAt: new Date(),
-    })
-    .where(eq(imports.id, importId));
+/** 原始文件写入失败时标记整批失败，避免出现无法读取的候选快照。 */
+async function markBatchStorageFailed(batchId: string) {
+  await markBatchFailed(batchId, "Failed to store the uploaded file.");
 }

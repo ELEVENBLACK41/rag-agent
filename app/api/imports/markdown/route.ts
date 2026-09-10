@@ -1,62 +1,76 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 Markdown 导入 API | edit by：Sliye
+ * 修改时间：2026-09-10 | 文件说明：VaultAgent D4 多文件与 ZIP 导入 API | edit by：Sliye
  */
 
+import { z } from "zod";
 import { start } from "workflow/api";
 import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
+import { ImportValidationError } from "@/lib/ingestion/errors";
+import { collectVaultUploadFiles } from "@/lib/ingestion/intake";
 import {
-  createLocalMarkdownImport,
-  recordImportDispatchError,
-  setImportWorkflowRun,
+  createLocalImportBatch,
+  recordImportBatchDispatchError,
+  setImportBatchWorkflowRun,
 } from "@/lib/ingestion/imports";
-import { ingestMarkdownWorkflow } from "@/workflows/ingest-markdown";
+import { ingestImportBatchWorkflow } from "@/workflows/ingest-import-batch";
 
 export const runtime = "nodejs";
 
-/** 单个 Markdown 文件允许的最大字节数：10 MB。 */
-const MAX_MARKDOWN_BYTES = 10 * 1024 * 1024;
+const importPathsSchema = z.array(z.string().min(1).max(1_024)).max(50);
 
 /**
- * 将一个 Markdown 文件排入仅限本地模式的持久化导入任务。
+ * 创建多文件候选快照并启动持久化索引。浏览器可为每个文件提供 Vault 内相对路径。
  *
  * @param request 仅接受 multipart/form-data 的 HTTP 请求。
  */
 export async function POST(request: Request) {
   if (!canAccessD3LocalFeature(request)) {
-    return Response.json({ error: "Markdown import is unavailable in this deployment mode." }, { status: 403 });
+    return Response.json({ error: "Import is unavailable in this deployment mode." }, { status: 403 });
   }
-
-  const formData = await request.formData();
-  const uploads = formData.getAll("file");
-  const [upload] = uploads;
-
-  if (uploads.length !== 1 || !(upload instanceof File)) {
-    return Response.json({ error: "Provide one Markdown file in the file field." }, { status: 400 });
-  }
-  if (!upload.name.toLowerCase().endsWith(".md")) {
-    return Response.json({ error: "Only .md files are supported during D2." }, { status: 415 });
-  }
-  if (!upload.size || upload.size > MAX_MARKDOWN_BYTES) {
-    return Response.json({ error: "Markdown must be between 1 byte and 10 MB." }, { status: 413 });
-  }
-  /**
-   * 用户上传的md文档转换未字节数据，并创建一个本地的md导入记录
-   */
-  const createdImport = await createLocalMarkdownImport(upload.name, new Uint8Array(await upload.arrayBuffer()));
 
   try {
-    // https://useworkflow.dev/docs/api-reference/workflow-api/start 见官网详细说明
-    /**
-     * start()会对新的工作流运行进行队列并返回一个对象Run
-     */
-    const run = await start(ingestMarkdownWorkflow, [createdImport.importId]);
-    await setImportWorkflowRun(createdImport.importId, run.runId);
-    return Response.json({ importId: createdImport.importId, status: "queued" }, { status: 202 });
-  } catch {
-    await recordImportDispatchError(createdImport.importId);
-    return Response.json(
-      { importId: createdImport.importId, status: "failed", error: "Workflow dispatch failed." },
-      { status: 503 },
+    const formData = await request.formData();
+    const uploads = [...formData.getAll("files"), ...formData.getAll("file")].filter(
+      (item): item is File => item instanceof File,
     );
+    const paths = parseRelativePaths(formData.get("paths"), uploads.length);
+    const files = await collectVaultUploadFiles(
+      uploads.map((file, index) => ({ file, relativePath: paths[index] ?? file.name })),
+    );
+    const createdBatch = await createLocalImportBatch(files);
+
+    try {
+       // https://useworkflow.dev/docs/api-reference/workflow-api/start 见官网详细说明
+      /**
+       * start()会对新的工作流运行进行队列并返回一个对象Run
+       */
+    const run = await start(ingestImportBatchWorkflow, [createdBatch.batchId]);
+      await setImportBatchWorkflowRun(createdBatch.batchId, run.runId);
+      return Response.json({ batchId: createdBatch.batchId, status: "queued" }, { status: 202 });
+    } catch {
+      await recordImportBatchDispatchError(createdBatch.batchId);
+      return Response.json(
+        { batchId: createdBatch.batchId, status: "failed", error: "Workflow dispatch failed." },
+        { status: 503 },
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "无法创建导入任务。";
+    const status = error instanceof ImportValidationError || error instanceof z.ZodError ? 400 : 500;
+    return Response.json({ error: message }, { status });
   }
+}
+
+/** 仅在传入路径数量与文件数量一致时使用客户端路径，避免服务端猜测错位。 */
+function parseRelativePaths(value: FormDataEntryValue | null, fileCount: number) {
+  if (typeof value !== "string") return [];
+  let rawPaths: unknown;
+  try {
+    rawPaths = JSON.parse(value);
+  } catch {
+    throw new ImportValidationError("文件路径格式无效。");
+  }
+  const parsed = importPathsSchema.parse(rawPaths);
+  if (parsed.length !== fileCount) throw new ImportValidationError("文件路径数量与上传文件不一致。");
+  return parsed;
 }

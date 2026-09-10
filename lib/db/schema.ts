@@ -54,10 +54,15 @@ export const logicalFiles = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     displayName: varchar("display_name", { length: 255 }).notNull(),
+    /** Vault 内用于识别同一逻辑文件的相对路径。旧 D3 数据为空。 */
+    sourcePath: varchar("source_path", { length: 1_024 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (table) => [index("logical_files_workspace_id_idx").on(table.workspaceId)],
+  (table) => [
+    index("logical_files_workspace_id_idx").on(table.workspaceId),
+    index("logical_files_workspace_path_idx").on(table.workspaceId, table.sourcePath),
+  ],
 );
 
 export const fileVersions = pgTable(
@@ -98,6 +103,44 @@ export const indexSnapshots = pgTable(
   (table) => [index("index_snapshots_workspace_id_idx").on(table.workspaceId)],
 );
 
+/** 一次多文件或 ZIP 提交对应一个导入批次，并只在完整就绪后发布候选快照。 */
+export const importBatches = pgTable(
+  "import_batches",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    workspaceId: varchar("workspace_id", { length: 64 })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    snapshotId: varchar("snapshot_id", { length: 64 })
+      .notNull()
+      .references(() => indexSnapshots.id, { onDelete: "cascade" }),
+    workflowRunId: varchar("workflow_run_id", { length: 255 }),
+    status: varchar("status", { length: 16 }).notNull(),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [index("import_batches_workspace_status_idx").on(table.workspaceId, table.status)],
+);
+
+/** 不可变快照显式记录可参与检索的文件版本，避免 D3 的“最新文件覆盖旧文件”问题。 */
+export const indexSnapshotFiles = pgTable(
+  "index_snapshot_files",
+  {
+    snapshotId: varchar("snapshot_id", { length: 64 })
+      .notNull()
+      .references(() => indexSnapshots.id, { onDelete: "cascade" }),
+    fileVersionId: varchar("file_version_id", { length: 64 })
+      .notNull()
+      .references(() => fileVersions.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("index_snapshot_files_snapshot_version_uq").on(table.snapshotId, table.fileVersionId),
+    index("index_snapshot_files_version_idx").on(table.fileVersionId),
+  ],
+);
+
 export const imports = pgTable(
   "imports",
   {
@@ -111,6 +154,9 @@ export const imports = pgTable(
     snapshotId: varchar("snapshot_id", { length: 64 })
       .notNull()
       .references(() => indexSnapshots.id, { onDelete: "cascade" }),
+    batchId: varchar("batch_id", { length: 64 }).references(() => importBatches.id, {
+      onDelete: "cascade",
+    }),
     workflowRunId: varchar("workflow_run_id", { length: 255 }),
     status: varchar("status", { length: 16 }).notNull(),
     errorMessage: text("error_message"),
@@ -135,6 +181,8 @@ export const chunks = pgTable(
     contentHash: varchar("content_hash", { length: 64 }).notNull(),
     startLine: integer("start_line").notNull(),
     endLine: integer("end_line").notNull(),
+    /** 标题路径、Block ID 及链接/附件目标，供可复现引用和后续原文抽屉使用。 */
+    sourceLocator: jsonb("source_locator").notNull().default({}),
     embedding: vector("embedding"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },

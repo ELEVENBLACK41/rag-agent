@@ -6,7 +6,7 @@ import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { cosineDistance } from "drizzle-orm/sql/functions/vector";
 import { embed, gateway } from "ai";
 import { getDatabase } from "@/lib/db/client";
-import { chunks, fileVersions, indexSnapshots, logicalFiles } from "@/lib/db/schema";
+import { chunks, fileVersions, indexSnapshotFiles, indexSnapshots, logicalFiles } from "@/lib/db/schema";
 
 /** DAY1 已验证的 Gateway 向量模型。 */
 const EMBEDDING_MODEL = "alibaba/qwen3-embedding-0.6b";
@@ -90,10 +90,11 @@ export async function retrievePublishedChunks(snapshotId: string, question: stri
     })
     .from(chunks) //查询的主表是 chunks
     .innerJoin(fileVersions, eq(chunks.fileVersionId, fileVersions.id)) //连接文件版本表
+    .innerJoin(indexSnapshotFiles, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
     .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))//连接逻辑文件表
     .where(
       and(
-        eq(chunks.snapshotId, snapshotId),  //eq表示等于，查询条件是 chunks.snapshotId 等于传入的 snapshotId
+        eq(indexSnapshotFiles.snapshotId, snapshotId),
         isNotNull(chunks.embedding),
         eq(fileVersions.status, "indexed"),
         isNull(logicalFiles.deletedAt),

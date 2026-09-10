@@ -17,34 +17,63 @@ export const maxDuration = 60;
  */
 export async function POST(request: Request) {
   if (!canAccessD3LocalFeature(request)) {
-    return Response.json({ error: "Chat is unavailable in this deployment mode." }, { status: 403 });
+    return Response.json(
+      { error: "Chat is unavailable in this deployment mode." },
+      { status: 403 },
+    );
   }
 
   let payload: unknown;
   try {
     payload = await request.json();
   } catch {
-    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    return Response.json(
+      { error: "Request body must be valid JSON." },
+      { status: 400 },
+    );
   }
 
-  const question = typeof payload === "object" && payload ? (payload as { question?: unknown }).question : null;
+  const question =
+    typeof payload === "object" && payload
+      ? (payload as { question?: unknown }).question
+      : null;
   const requestedConversationId =
-    typeof payload === "object" && payload ? (payload as { conversationId?: unknown }).conversationId : null;
+    typeof payload === "object" && payload
+      ? (payload as { conversationId?: unknown }).conversationId
+      : null;
   const conversationId = requestedConversationId ?? null;
-  if (typeof question !== "string" || !question.trim() || question.length > 4_000) {
-    return Response.json({ error: "Question must be between 1 and 4,000 characters." }, { status: 400 });
+  if (
+    typeof question !== "string" ||
+    !question.trim() ||
+    question.length > 4_000
+  ) {
+    return Response.json(
+      { error: "Question must be between 1 and 4,000 characters." },
+      { status: 400 },
+    );
   }
   if (conversationId !== null && typeof conversationId !== "string") {
-    return Response.json({ error: "conversationId must be a string when provided." }, { status: 400 });
+    return Response.json(
+      { error: "conversationId must be a string when provided." },
+      { status: 400 },
+    );
   }
 
   try {
-    const chatRun = await createChatRun(question.trim(), conversationId ?? undefined);
+    //调用核心逻辑 创建单轮Run
+    const chatRun = await createChatRun(
+      question.trim(),
+      conversationId ?? undefined,
+    );
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (event: string, data: unknown) => {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          controller.enqueue(
+            encoder.encode(
+              `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+            ),
+          );
         };
 
         try {
@@ -53,7 +82,8 @@ export async function POST(request: Request) {
             send(event.type, event.data);
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : "知识问答执行失败。";
+          const message =
+            error instanceof Error ? error.message : "知识问答执行失败。";
           send("error", { message });
         } finally {
           controller.close();
@@ -69,7 +99,10 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to start the knowledge query.";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Unable to start the knowledge query.";
     return Response.json({ error: message }, { status: 400 });
   }
 }
