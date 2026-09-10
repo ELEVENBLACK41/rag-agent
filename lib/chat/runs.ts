@@ -128,6 +128,12 @@ export async function createChatRun(question: string, conversationId?: string): 
  *
  * @param chatRun 已持久化的单轮问答 Run。
  * @param question 已保存的用户问题。
+ * 
+ * async function* 很关键，它是一个异步生成器，可以不断的产生事件返回给前端
+ * yield 阶段消息
+ * yield 文本片段增量
+ * yield 完成事件
+ * APi层通过这个循环可以把事件发送给浏览器消费，详情可以看 api/chat/route.ts
  */
 export async function* executeChatRun(
   chatRun: ChatRun,
@@ -135,40 +141,45 @@ export async function* executeChatRun(
 ): AsyncGenerator<ChatStreamEvent> {
   try {
     yield await createStageEvent(chatRun.runId, "正在检索已发布的知识库快照。");
+    //开始调用search了，给快照id和用户的prompt 去搜索
     const sources = await retrievePublishedChunks(chatRun.snapshotId, question);
+    
     if (!sources.length) throw new Error("当前资料中没有可用于回答的已索引文本块。");
-
+    //整理一下返回得字段，把相似的啥的先剔除
     const citations = toCitations(sources);
+    //再通知浏览器，已经找到多少个候选片段，即将生成回答
     yield await createStageEvent(chatRun.runId, `已找到 ${sources.length} 个候选片段，正在生成回答。`);
-
+    //ai sdk得api 调用模型去流式生成
     const result = streamText({
       model: gateway(CHAT_MODEL),
-      system: buildSystemInstruction(sources),
+      system: buildSystemInstruction(sources), //构造模型得上下文
       prompt: question,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
-      reasoning: "none",
+      reasoning: "none", // 这里是推理输出 先暂时关闭
     });
 
     let answer = "";
     let pendingEventText = "";
     let lastEventFlushAt = Date.now();
+    //循环读取模型生成得文本
     for await (const textDelta of result.textStream) {
       answer += textDelta;
+      //累计写入库得文本
       pendingEventText += textDelta;
       yield { type: "delta", data: { text: textDelta } };
-
+      //每隔300ms就把增量写入数据库，避免每个token都写入数据库
       if (Date.now() - lastEventFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
         await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
         pendingEventText = "";
         lastEventFlushAt = Date.now();
       }
     }
-
+    //模型结束后补齐文本
     if (pendingEventText) {
       await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
     }
     if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
-
+    //完成一次run
     await completeChatRun(chatRun, answer, citations);
     yield { type: "complete", data: { citations } };
   } catch (error) {
@@ -258,7 +269,7 @@ function buildSystemInstruction(sources: RetrievedChunk[]) {
   ].join("\n\n");
 }
 
-/** 按单 Run 的单调序号写入事件。D3 每个 Run 只有一个执行器，不产生并发写入。 */
+/** 按单 Run 的单调序号写入事件。D3 每个 Run 只有一个执行器，不产生并发写入 未来会扩展 */
 async function appendRunEvent(runId: string, eventType: string, payload: Record<string, unknown>) {
   const db = getDatabase();
   const [lastEvent] = await db
@@ -287,7 +298,7 @@ async function completeChatRun(chatRun: ChatRun, answer: string, citations: Chat
       .where(eq(runEvents.runId, chatRun.runId))
       .orderBy(desc(runEvents.sequence))
       .limit(1);
-
+  //保存助手消息
     await transaction.insert(messages).values({
       id: randomUUID(),
       conversationId: chatRun.conversationId,
@@ -297,10 +308,12 @@ async function completeChatRun(chatRun: ChatRun, answer: string, citations: Chat
       status: "completed",
       citations,
     });
+  //更新run得状态
     await transaction
       .update(runs)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(runs.id, chatRun.runId));
+  //写入完成事件
     await transaction.insert(runEvents).values({
       id: randomUUID(),
       runId: chatRun.runId,
