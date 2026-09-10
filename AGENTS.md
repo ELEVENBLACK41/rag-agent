@@ -1,3 +1,11 @@
+<!--
+ * @Author: shaoliye shaoliye@fengmap.com
+ * @Date: 2026-09-07 13:41:54
+ * @LastEditors: shaoliye shaoliye@fengmap.com
+ * @LastEditTime: 2026-09-10 10:15:57
+ * @FilePath: \rag-agent\AGENTS.md
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+-->
 <!-- 修改时间：2026-09-04 | 文件说明：VaultAgent 项目协作与开发规范 | edit by：Codex -->
 
 # VaultAgent 开发规范
@@ -5,7 +13,7 @@
 # 
 
 ## 协作与决策
-- 称呼用户为“老大”，使用中文，沟通直接、简洁，先讲结论。
+- 称呼用户为“老大”，使用中文，沟通直接、简洁，先讲结论
 - 保持批判性思维；发现需求、判断或方案有问题时，说明依据、影响和可行替代，不一味附和。
 - 项目范围与技术方案参考 `VAULTAGENT_PLAN.md`；最新用户决定优先，发现冲突先说明。
 - 只完成当前授权范围，不擅自增加功能、重构、安装新技术栈或部署。
