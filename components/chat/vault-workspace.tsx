@@ -257,7 +257,20 @@ export function VaultWorkspace() {
             <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-5 py-8">
               {messages.length === 0 ? <ConversationEmptyState description={canChat ? "输入问题，VaultAgent 会检索已导入资料并给出行号引用。" : "请先在左侧上传并完成一个 Markdown 文件的索引。"} icon={<MessageSquareIcon className="size-10" />} title="开始你的知识库对话" /> : messages.map((message) => (
                 <Message from={message.role} key={message.id}>
-                  <MessageContent>{message.role === "assistant" ? (message.content ? <MessageResponse>{message.content}</MessageResponse> : <span className="text-muted-foreground">正在生成回答…</span>) : message.content}</MessageContent>
+                  <MessageContent>
+                    {message.role === "assistant" ? 
+                      (message.content ? 
+                        <MessageResponse
+                      isAnimating={isStreaming}
+                        
+                        >
+                          {message.content}
+                        </MessageResponse> 
+                        : <span className="text-muted-foreground">正在生成回答…</span>
+                      ) : 
+                      message.content
+                    }
+                  </MessageContent>
                   {message.role === "assistant" && message.citations && message.citations.length > 0 && <div className="flex flex-wrap gap-2">{message.citations.map((citation) => <Badge className="gap-1" key={citation.id} variant="secondary"><FileTextIcon className="size-3" />【{citation.id}】{citation.displayName} · {citation.startLine}-{citation.endLine} 行</Badge>)}</div>}
                 </Message>
               ))}

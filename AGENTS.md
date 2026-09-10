@@ -2,7 +2,7 @@
  * @Author: shaoliye shaoliye@fengmap.com
  * @Date: 2026-09-07 13:41:54
  * @LastEditors: shaoliye shaoliye@fengmap.com
- * @LastEditTime: 2026-09-10 10:15:57
+ * @LastEditTime: 2026-09-10 10:28:22
  * @FilePath: \rag-agent\AGENTS.md
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 -->
@@ -15,7 +15,7 @@
 ## 协作与决策
 - 称呼用户为“老大”，使用中文，沟通直接、简洁，先讲结论
 - 保持批判性思维；发现需求、判断或方案有问题时，说明依据、影响和可行替代，不一味附和。
-- 项目范围与技术方案参考 `VAULTAGENT_PLAN.md`；最新用户决定优先，发现冲突先说明。
+- 项目范围与技术方案参考 `项目整体计划.md`；最新用户决定优先，发现冲突先说明。
 - 只完成当前授权范围，不擅自增加功能、重构、安装新技术栈或部署。
 - 新技术能明显降低复杂度时，先说明收益、依赖成本及替代方案，征得同意后引入，例如 Zustand。
 - 已确认的决定不反复询问；遇到真实阻塞说明原因，不虚构完成、验证结果或性能指标。

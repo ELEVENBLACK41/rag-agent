@@ -1,6 +1,8 @@
 @import "tailwindcss";
-@import "tw-animate-css";
+/* Tailwind 在 Windows + Turbopack 下无法解析该包仅提供 style 条件的根导出，直接引入其发布的样式文件。 */
+@import "../node_modules/tw-animate-css/dist/tw-animate.css";
 @import "shadcn/tailwind.css";
+@import "streamdown/styles.css";
 @source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
