@@ -17,8 +17,18 @@ export type PdfSourceLocator = {
   pageNumber: number;
 };
 
+/** 视觉模型对 PDF 页面生成的派生描述，仍回溯到同一物理页。 */
+export type PdfVisualSourceLocator = {
+  format: "pdf-visual";
+  pageNumber: number;
+  visualAssetId: string;
+};
+
 /** 统一的原文定位结构；不同格式通过 format 和专属字段表达位置。 */
-export type SourceLocator = TextSourceLocator | PdfSourceLocator;
+export type SourceLocator =
+  | TextSourceLocator
+  | PdfSourceLocator
+  | PdfVisualSourceLocator;
 
 /** 任一可索引格式产生的文本块；PDF 没有可复现的行号。 */
 export type ParsedTextChunk = {
@@ -32,6 +42,7 @@ export type ParsedTextChunk = {
 export type ImportDiagnostic = {
   severity: "warning";
   stage: "parse";
+  code: "no-text-layer" | "text-extraction-failed";
   message: string;
   pageNumber?: number;
 };
@@ -48,6 +59,17 @@ export function toSourceLocator(value: unknown): SourceLocator | null {
   const locator = value as Record<string, unknown>;
   if (locator.format === "pdf" && typeof locator.pageNumber === "number") {
     return { format: "pdf", pageNumber: locator.pageNumber };
+  }
+  if (
+    locator.format === "pdf-visual" &&
+    typeof locator.pageNumber === "number" &&
+    typeof locator.visualAssetId === "string"
+  ) {
+    return {
+      format: "pdf-visual",
+      pageNumber: locator.pageNumber,
+      visualAssetId: locator.visualAssetId,
+    };
   }
   if (
     (locator.format === "markdown" || locator.format === "plain-text") &&

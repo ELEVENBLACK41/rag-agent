@@ -49,6 +49,7 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedDocument> {
           diagnostics.push({
             severity: "warning",
             stage: "parse",
+            code: "no-text-layer",
             pageNumber,
             message: "该页没有可提取的文本层，尚未进行视觉分析。",
           });
@@ -63,6 +64,7 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedDocument> {
         diagnostics.push({
           severity: "warning",
           stage: "parse",
+          code: "text-extraction-failed",
           pageNumber,
           message: "该页文本层读取失败，未纳入本次索引。",
         });

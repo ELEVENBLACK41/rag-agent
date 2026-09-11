@@ -39,6 +39,11 @@ export function createStorageKey(workspaceId: string, fileVersionId: string) {
   return path.posix.join(workspaceId, "files", `${fileVersionId}.md`);
 }
 
+/** 为渲染图等派生资产创建服务器控制的 PNG 存储键。 */
+export function createDerivedStorageKey(workspaceId: string, assetId: string) {
+  return path.posix.join(workspaceId, "derived", `${assetId}.png`);
+}
+
 /**
  * 将原始上传字节写入配置的私有数据目录。
  *

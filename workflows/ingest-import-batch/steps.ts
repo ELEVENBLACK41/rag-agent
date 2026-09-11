@@ -19,6 +19,7 @@ import {
   publishImportBatch as publishBatch,
 } from "@/lib/ingestion/imports";
 import { replaceImportDiagnostics } from "@/lib/ingestion/import-diagnostics";
+import { analyzePdfVisualPages } from "@/lib/ingestion/visual/pdf-page-analysis";
 import { readStoredFile } from "@/lib/storage/files";
 
 /** 经过 DAY1 验证的 Gateway 向量模型。 */
@@ -177,6 +178,12 @@ export async function embedStoredChunks(importId: string) {
 export async function markIndexableImportReady(importId: string) {
   "use step";
   await markImportReady(importId);
+}
+
+/** 对 PDF 自动候选的无文本页执行有界视觉分析，失败不阻断文本索引。 */
+export async function analyzeIndexableImportVisualPages(importId: string) {
+  "use step";
+  return analyzePdfVisualPages(importId);
 }
 
 /** 记录一个文件的具体失败，以便批次状态接口保留真实失败来源。 */

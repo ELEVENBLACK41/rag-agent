@@ -225,6 +225,8 @@ export function VaultWorkspace() {
 function getCitationLocation(citation: Citation) {
   if (citation.sourceLocator?.format === "pdf" && citation.sourceLocator.pageNumber)
     return `第 ${citation.sourceLocator.pageNumber} 页`;
+  if (citation.sourceLocator?.format === "pdf-visual" && citation.sourceLocator.pageNumber)
+    return `第 ${citation.sourceLocator.pageNumber} 页 · 视觉分析`;
   if (citation.startLine !== null && citation.endLine !== null)
     return `${citation.startLine}-${citation.endLine} 行`;
   return "位置不可用";

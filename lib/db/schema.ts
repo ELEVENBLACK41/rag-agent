@@ -176,6 +176,9 @@ export const importDiagnostics = pgTable(
       .references(() => imports.id, { onDelete: "cascade" }),
     severity: varchar("severity", { length: 16 }).notNull(),
     stage: varchar("stage", { length: 16 }).notNull(),
+    code: varchar("code", { length: 32 })
+      .notNull()
+      .default("text-extraction-failed"),
     pageNumber: integer("page_number"),
     message: text("message").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -186,6 +189,40 @@ export const importDiagnostics = pgTable(
       table.importId,
       table.pageNumber,
     ),
+  ],
+);
+
+/** PDF 页渲染图及其有界视觉分析结果；原图与模型派生内容分字段保存。 */
+export const visualAssets = pgTable(
+  "visual_assets",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    importId: varchar("import_id", { length: 64 })
+      .notNull()
+      .references(() => imports.id, { onDelete: "cascade" }),
+    fileVersionId: varchar("file_version_id", { length: 64 })
+      .notNull()
+      .references(() => fileVersions.id, { onDelete: "cascade" }),
+    pageNumber: integer("page_number").notNull(),
+    mediaType: varchar("media_type", { length: 127 }).notNull(),
+    storageKey: text("storage_key").notNull(),
+    contentHash: varchar("content_hash", { length: 64 }).notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    modelId: varchar("model_id", { length: 127 }),
+    promptVersion: varchar("prompt_version", { length: 32 }),
+    analysis: jsonb("analysis"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("visual_assets_file_version_page_uq").on(
+      table.fileVersionId,
+      table.pageNumber,
+    ),
+    index("visual_assets_import_id_idx").on(table.importId),
   ],
 );
 

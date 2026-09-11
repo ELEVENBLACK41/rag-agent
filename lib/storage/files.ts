@@ -5,6 +5,7 @@
 import { deletePrivateBlob, readPrivateBlob, writePrivateBlob } from "@/lib/storage/blob";
 import {
   createStorageKey,
+  createDerivedStorageKey,
   deleteLocalFile,
   readLocalFile,
   writeLocalFile,
@@ -22,7 +23,7 @@ function getStorageProvider(): StorageProvider {
   throw new Error("STORAGE_PROVIDER must be filesystem or blob.");
 }
 
-export { createStorageKey };
+export { createDerivedStorageKey, createStorageKey };
 
 /**
  * 写入原始文件，调用者无需了解本地卷或私有 Blob 的差异。

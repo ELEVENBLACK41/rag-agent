@@ -81,6 +81,11 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
                   {diagnostic.pageNumber ? `第 ${diagnostic.pageNumber} 页：` : ""}{diagnostic.message}
                 </p>
               ))}
+              {file.visualAssets.map((asset) => (
+                <p className="pl-6 text-xs text-muted-foreground" key={`visual-${asset.pageNumber}`}>
+                  第 {asset.pageNumber} 页视觉分析：{getVisualAssetLabel(asset.status, asset.errorMessage)}
+                </p>
+              ))}
             </li>
           ))}
         </ul>}
@@ -104,4 +109,12 @@ function getFileStatusLabel(status: string, mediaType: string) {
   if (status === "completed" && !mediaType.startsWith("text/")) return "附件已保存";
   const labels: Record<string, string> = { completed: "已发布", ready: "附件已保存", running: "处理中", queued: "排队中", failed: "失败", deleted: "已删除" };
   return labels[status] ?? status;
+}
+
+/** 将视觉分析的后台状态转换为导入面板可见文字。 */
+function getVisualAssetLabel(status: string, errorMessage: string | null) {
+  if (status === "completed") return "已完成";
+  if (status === "running") return "处理中";
+  if (status === "failed") return errorMessage ?? "失败";
+  return status;
 }

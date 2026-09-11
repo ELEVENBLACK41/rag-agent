@@ -276,6 +276,8 @@ function buildSystemInstruction(sources: RetrievedChunk[]) {
 function describeSourceLocation(source: RetrievedChunk) {
   if (source.sourceLocator?.format === "pdf")
     return `第 ${source.sourceLocator.pageNumber} 页`;
+  if (source.sourceLocator?.format === "pdf-visual")
+    return `第 ${source.sourceLocator.pageNumber} 页 · 视觉分析`;
   if (source.startLine !== null && source.endLine !== null)
     return `第 ${source.startLine}-${source.endLine} 行`;
   return "位置不可用";

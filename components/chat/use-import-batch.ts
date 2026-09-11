@@ -17,6 +17,11 @@ export type ImportFileState = {
     message: string;
     pageNumber?: number;
   }>;
+  visualAssets: Array<{
+    pageNumber: number;
+    status: string;
+    errorMessage: string | null;
+  }>;
 };
 
 export type ImportBatchState = {

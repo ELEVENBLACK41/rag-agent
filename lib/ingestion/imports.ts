@@ -13,6 +13,7 @@ import {
   indexSnapshots,
   logicalFiles,
   principals,
+  visualAssets,
   workspaces,
 } from "@/lib/db/schema";
 import { INDEXABLE_MEDIA_TYPES, isIndexableMediaType } from "@/lib/ingestion/formats/file-types";
@@ -192,11 +193,30 @@ export async function getLocalImportBatchStatus(batchId: string) {
     .where(eq(imports.batchId, batchId));
 
   const diagnosticsByImport = await getImportDiagnostics(files.map((file) => file.id));
+  const visualAssetRecords = files.length
+    ? await db
+        .select({
+          importId: visualAssets.importId,
+          pageNumber: visualAssets.pageNumber,
+          status: visualAssets.status,
+          errorMessage: visualAssets.errorMessage,
+        })
+        .from(visualAssets)
+        .where(inArray(visualAssets.importId, files.map((file) => file.id)))
+        .orderBy(visualAssets.pageNumber)
+    : [];
+  const visualAssetsByImport = new Map<string, typeof visualAssetRecords>();
+  for (const asset of visualAssetRecords) {
+    const assets = visualAssetsByImport.get(asset.importId) ?? [];
+    assets.push(asset);
+    visualAssetsByImport.set(asset.importId, assets);
+  }
   return {
     ...batch,
     files: files.map((file) => ({
       ...file,
       diagnostics: diagnosticsByImport.get(file.id) ?? [],
+      visualAssets: visualAssetsByImport.get(file.id) ?? [],
     })),
   };
 }

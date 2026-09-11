@@ -14,6 +14,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(zod@4.3.5)
+      '@napi-rs/canvas':
+        specifier: 1.0.9
+        version: 1.0.9
       '@streamdown/cjk':
         specifier: 1.0.3
         version: 1.0.3(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.8)(unified@11.0.5)
@@ -7875,7 +7878,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 1.0.9
       '@napi-rs/canvas-win32-arm64-msvc': 1.0.9
       '@napi-rs/canvas-win32-x64-msvc': 1.0.9
-    optional: true
 
   '@napi-rs/nice-android-arm-eabi@1.1.1':
     optional: true

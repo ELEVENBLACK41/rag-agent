@@ -30,6 +30,7 @@ export async function replaceImportDiagnostics(
         importId,
         severity: diagnostic.severity,
         stage: diagnostic.stage,
+        code: diagnostic.code,
         pageNumber: diagnostic.pageNumber ?? null,
         message: diagnostic.message,
       })),
@@ -49,6 +50,7 @@ export async function getImportDiagnostics(importIds: string[]) {
       importId: importDiagnostics.importId,
       severity: importDiagnostics.severity,
       stage: importDiagnostics.stage,
+      code: importDiagnostics.code,
       pageNumber: importDiagnostics.pageNumber,
       message: importDiagnostics.message,
     })
@@ -61,6 +63,10 @@ export async function getImportDiagnostics(importIds: string[]) {
     diagnostics.push({
       severity: "warning",
       stage: "parse",
+      code:
+        record.code === "no-text-layer"
+          ? "no-text-layer"
+          : "text-extraction-failed",
       message: record.message,
       ...(record.pageNumber ? { pageNumber: record.pageNumber } : {}),
     });

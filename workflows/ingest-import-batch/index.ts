@@ -5,6 +5,7 @@
 import { getErrorMessage } from "@/lib/ingestion/errors";
 import {
   embedStoredChunks,
+  analyzeIndexableImportVisualPages,
   failIndexableImport,
   failImportBatch,
   listBatchIndexableImports,
@@ -29,6 +30,7 @@ export async function ingestImportBatchWorkflow(batchId: string) {
     for (const indexableImport of indexableImports) {
       try {
         await parseAndStoreChunks(indexableImport.id);
+        await analyzeIndexableImportVisualPages(indexableImport.id);
         embeddedChunkCount += await embedStoredChunks(indexableImport.id);
         await markIndexableImportReady(indexableImport.id);
       } catch (error) {
