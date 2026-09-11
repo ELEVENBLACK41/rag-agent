@@ -3,7 +3,7 @@
  */
 
 import { parseMarkdown } from "@/lib/ingestion/formats/markdown";
-import { parsePlainText } from "@/lib/ingestion/formats/plain-text";
+import { parsePlainText } from "@/lib/ingestion/formats/txt";
 
 /** 已在当前阶段实现文本切块的 MIME 类型。 */
 const TEXT_PARSERS = {

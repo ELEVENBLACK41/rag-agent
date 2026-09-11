@@ -57,7 +57,17 @@ export function parseMarkdown(markdown: string): ParsedTextChunk[] {
     const content = headingPath.length
       ? `${headingPath.at(-1)}\n\n${body}`
       : body;
+    /**
+     * 创建原文定位信息
+     * 从正文提取MD链接
+     * Obsidian Wiki链接
+     * 附件链接
+     * Obsidian Block ID
+     * 标题路径
+     */
     const sourceLocator = createSourceLocator(body, headingPath);
+
+    //如果内容超过1400字符，会按固定字符数切割
     for (
       let offset = 0;
       offset < content.length;
@@ -72,11 +82,15 @@ export function parseMarkdown(markdown: string): ParsedTextChunk[] {
     }
   };
 
+  //遍历markdown每一行，数组下标从零开始，但是文件行号从1开始所以加1
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
+    //标题识别
     const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    //遇到标题得时候先提交旧得段落，如果遇到标题前累计了正文，那么先提交正文
     if (headingMatch) {
       flush(lineNumber - 1);
+      //维护标题栈
       const level = headingMatch[1].length;
       while (headingStack.length && headingStack.at(-1)!.level >= level)
         headingStack.pop();
@@ -97,13 +111,26 @@ export function parseMarkdown(markdown: string): ParsedTextChunk[] {
   return chunks;
 }
 
-/** 从一个文本块中提取 Obsidian Block ID、wiki 链接与 Markdown 链接。 */
+/** 从一个文本块中提取 Obsidian Block ID、wiki 链接与 Markdown 链接。
+ * 函数主要负责生成原文定位信息
+ * 结果类似于
+ * {
+  format: "markdown",
+  headingPath: ["产品文档", "安装说明"],
+  blockIds: ["install-node"],
+  links: ["docs/config.md", "https://example.com"],
+  attachments: ["images/logo.png"],
+  }
+
+ */
 function createSourceLocator(
   content: string,
   headingPath: string[],
 ): SourceLocator {
+  //Set去重
   const links = new Set<string>();
   const attachments = new Set<string>();
+  //统一处理链接目标的内部函数
   const addTarget = (target: string, isAttachment: boolean) => {
     const normalized = target.trim().replace(/^<|>$/g, "");
     if (!normalized || /^(?:https?:|mailto:)/i.test(normalized)) return;
@@ -134,3 +161,9 @@ function createSourceLocator(
     attachments: [...attachments],
   };
 }
+
+
+/**
+ * 目前 该md解析器是一个很简单的解析器，其主要是用很低的实现成本来提取md中对检索最有价值的结构化信息
+ * 后续迭代会持续迭代  AST(理解 Markdown 的结构，再进行业务处理，复杂场景更可靠)
+ */

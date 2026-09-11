@@ -159,7 +159,9 @@ export async function createLocalImportBatch(files: VaultUploadFile[]) {
   return { batchId, snapshotId };
 }
 
-/** 读取一个批次的浏览器展示状态，不返回原始文件内容。 */
+/** 读取一个批次的浏览器展示状态，不返回原始文件内容
+ * 给前端查询导入状态
+ */
 export async function getLocalImportBatchStatus(batchId: string) {
   const db = getDatabase();
   const [batch] = await db
@@ -190,7 +192,9 @@ export async function getLocalImportBatchStatus(batchId: string) {
   return { ...batch, files };
 }
 
-/** 关联已启动的持久化 Workflow Run。 */
+/** 关联已启动的持久化 Workflow Run
+ * workflow 启动后会返回一个runid
+ */
 export async function setImportBatchWorkflowRun(
   batchId: string,
   workflowRunId: string,
@@ -407,7 +411,9 @@ export async function publishImportBatch(batchId: string) {
   });
 }
 
-/** 供 Workflow 将已经成功向量化的文本文件标记为候选快照就绪。 */
+/** 供 Workflow 将已经成功向量化的文本文件标记为候选快照就绪
+ * 文件完成向量解析时候 step会调用这个保存文件ready状态
+ */
 export async function markImportReady(importId: string) {
   await getDatabase()
     .update(imports)
