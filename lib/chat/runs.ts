@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 单轮检索问答 Run 与事件持久化
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 单轮检索问答 Run 与事件持久化
  * 此文件为一次问答的执行核心编排文件，结合 lib/retrieval/search.ts 进行检索，并结合 ai-sdk-core 进行模型生成回答
  * 主要负责：
  * 创建单轮问答 Run
@@ -22,6 +22,7 @@ import {
   retrievePublishedChunks,
   type RetrievedChunk,
 } from "@/lib/retrieval/search";
+import type { SourceLocator } from "@/lib/ingestion/formats/types";
 
 /** DAY1 已验证的 D3 问答模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
@@ -35,8 +36,9 @@ export type ChatCitation = {
   id: number;
   chunkId: string;
   displayName: string;
-  startLine: number;
-  endLine: number;
+  startLine: number | null;
+  endLine: number | null;
+  sourceLocator: SourceLocator | null;
 };
 
 // 一次问答执行的身份信息
@@ -248,6 +250,7 @@ function toCitations(sources: RetrievedChunk[]): ChatCitation[] {
     displayName: source.displayName,
     startLine: source.startLine,
     endLine: source.endLine,
+    sourceLocator: source.sourceLocator,
   }));
 }
 
@@ -256,7 +259,7 @@ function buildSystemInstruction(sources: RetrievedChunk[]) {
   const sourceText = sources
     .map(
       (source, index) =>
-        `【${index + 1}】${source.displayName}（第 ${source.startLine}-${source.endLine} 行）\n${source.content}`,
+        `【${index + 1}】${source.displayName}（${describeSourceLocation(source)}）\n${source.content}`,
     )
     .join("\n\n");
 
@@ -267,6 +270,15 @@ function buildSystemInstruction(sources: RetrievedChunk[]) {
     "资料片段：",
     sourceText,
   ].join("\n\n");
+}
+
+/** 将不同格式的定位信息转换为模型与用户均可理解的引用描述。 */
+function describeSourceLocation(source: RetrievedChunk) {
+  if (source.sourceLocator?.format === "pdf")
+    return `第 ${source.sourceLocator.pageNumber} 页`;
+  if (source.startLine !== null && source.endLine !== null)
+    return `第 ${source.startLine}-${source.endLine} 行`;
+  return "位置不可用";
 }
 
 /** 按单 Run 的单调序号写入事件。D3 每个 Run 只有一个执行器，不产生并发写入 未来会扩展 */

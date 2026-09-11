@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-10 | 文件说明：VaultAgent D4 多文件导入批次、版本与快照发布 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 多文件导入批次、版本与快照发布 | edit by：Sliye
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -15,6 +15,8 @@ import {
   principals,
   workspaces,
 } from "@/lib/db/schema";
+import { INDEXABLE_MEDIA_TYPES, isIndexableMediaType } from "@/lib/ingestion/formats/file-types";
+import { getImportDiagnostics } from "@/lib/ingestion/import-diagnostics";
 import {
   createStorageKey,
   deleteStoredFile,
@@ -58,7 +60,7 @@ export async function ensureLocalPrincipal() {
 }
 
 /**
- * 将一个受校验的文件批次保存为候选快照；文本文件待 Workflow 索引，图片附件只保留原始文件和路径。
+ * 将一个受校验的文件批次保存为候选快照；可索引文件待 Workflow 处理，图片附件只保留原始文件和路径。
  *
  * @param files 已通过上传入口类型、路径和总量校验的文件。
  */
@@ -189,7 +191,14 @@ export async function getLocalImportBatchStatus(batchId: string) {
     .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
     .where(eq(imports.batchId, batchId));
 
-  return { ...batch, files };
+  const diagnosticsByImport = await getImportDiagnostics(files.map((file) => file.id));
+  return {
+    ...batch,
+    files: files.map((file) => ({
+      ...file,
+      diagnostics: diagnosticsByImport.get(file.id) ?? [],
+    })),
+  };
 }
 
 /** 关联已启动的持久化 Workflow Run
@@ -292,8 +301,8 @@ export async function deleteLocalImport(importId: string) {
   return true;
 }
 
-/** 供 Workflow 读取本批次待索引的 Markdown/TXT 文件。 */
-export async function getBatchTextImports(batchId: string) {
+/** 供 Workflow 读取本批次待处理的已注册可索引文件。 */
+export async function getBatchIndexableImports(batchId: string) {
   return getDatabase()
     .select({ id: imports.id })
     .from(imports)
@@ -301,7 +310,7 @@ export async function getBatchTextImports(batchId: string) {
     .where(
       and(
         eq(imports.batchId, batchId),
-        inArray(fileVersions.mediaType, ["text/markdown", "text/plain"]),
+        inArray(fileVersions.mediaType, INDEXABLE_MEDIA_TYPES),
       ),
     );
 }
@@ -385,10 +394,7 @@ export async function publishImportBatch(batchId: string) {
         );
     }
     const indexedFileVersionIds = batchFiles
-      .filter(
-        (file) =>
-          file.mediaType === "text/markdown" || file.mediaType === "text/plain",
-      )
+      .filter((file) => isIndexableMediaType(file.mediaType))
       .map((file) => file.fileVersionId);
     if (indexedFileVersionIds.length) {
       await transaction
@@ -418,6 +424,18 @@ export async function markImportReady(importId: string) {
   await getDatabase()
     .update(imports)
     .set({ status: "ready", errorMessage: null })
+    .where(eq(imports.id, importId));
+}
+
+/** 记录一个可索引文件的具体失败，批次失败时保留其原始错误信息。 */
+export async function markImportFailed(importId: string, message: string) {
+  await getDatabase()
+    .update(imports)
+    .set({
+      status: "failed",
+      errorMessage: message.slice(0, 1_000),
+      completedAt: new Date(),
+    })
     .where(eq(imports.id, importId));
 }
 
@@ -456,7 +474,11 @@ export async function markBatchFailed(batchId: string, message: string) {
         completedAt: new Date(),
       })
       .where(
-        and(eq(imports.batchId, batchId), ne(imports.status, "completed")),
+        and(
+          eq(imports.batchId, batchId),
+          ne(imports.status, "completed"),
+          ne(imports.status, "failed"),
+        ),
       );
   });
 }

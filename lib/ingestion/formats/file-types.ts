@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-10 | 文件说明：VaultAgent 支持格式与导入职责声明 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 支持格式与导入职责声明 | edit by：Sliye
  * 文件得格式识别与职责分配中心，供 intake.ts 与 workflows/ingest-import-batch/steps.ts 共用
  */
 
@@ -19,14 +19,22 @@ export type ImportFileType = {
   kind: ImportFileKind;
 };
 
+/** 当前已注册解析器的 MIME 类型，供批次查询与发布状态共用。 */
+export const INDEXABLE_MEDIA_TYPES = [
+  "text/markdown",
+  "text/plain",
+  "application/pdf",
+] as const;
+
 const FILE_TYPES: Record<string, ImportFileType> = {
   ".md": { mediaType: "text/markdown", kind: "index" },
   ".txt": { mediaType: "text/plain", kind: "index" },
   ".png": { mediaType: "image/png", kind: "attachment" },
   ".jpg": { mediaType: "image/jpeg", kind: "attachment" },
   ".jpeg": { mediaType: "image/jpeg", kind: "attachment" },
-  /** D5-D7 接入对应解析器前，仅安全保存为附件。 */
-  ".pdf": { mediaType: "application/pdf", kind: "attachment" },
+  /** PDF 文本层由 D5 解析器按物理页建立索引。 */
+  ".pdf": { mediaType: "application/pdf", kind: "index" },
+  /** D6-D7 接入对应解析器前，仅安全保存为附件。 */
   ".docx": {
     mediaType:
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -63,4 +71,9 @@ export function getImportFileType(relativePath: string): ImportFileType {
     );
   }
   return fileType;
+}
+
+/** 判断文件版本是否应进入已注册的解析与向量化工作流。 */
+export function isIndexableMediaType(mediaType: string) {
+  return INDEXABLE_MEDIA_TYPES.some((type) => type === mediaType);
 }

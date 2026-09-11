@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 已发布 Markdown 快照向量检索 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 已发布快照向量检索 | edit by：Sliye
  */
 
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
@@ -7,6 +7,10 @@ import { cosineDistance } from "drizzle-orm/sql/functions/vector";
 import { embed, gateway } from "ai";
 import { getDatabase } from "@/lib/db/client";
 import { chunks, fileVersions, indexSnapshotFiles, indexSnapshots, logicalFiles } from "@/lib/db/schema";
+import {
+  toSourceLocator,
+  type SourceLocator,
+} from "@/lib/ingestion/formats/types";
 
 /** DAY1 已验证的 Gateway 向量模型。 */
 const EMBEDDING_MODEL = "alibaba/qwen3-embedding-0.6b";
@@ -19,8 +23,9 @@ export type RetrievedChunk = {
   chunkId: string;
   content: string;
   displayName: string;
-  startLine: number;
-  endLine: number;
+  startLine: number | null;
+  endLine: number | null;
+  sourceLocator: SourceLocator | null;
   similarity: number;
 };
 
@@ -86,6 +91,7 @@ export async function retrievePublishedChunks(snapshotId: string, question: stri
       displayName: logicalFiles.displayName,//原始文件名
       startLine: chunks.startLine,//记录文本块在原文件中的行号范围
       endLine: chunks.endLine,
+      sourceLocator: chunks.sourceLocator,
       similarity: sql<number>`1 - (${distance})`, //相似度 = 1 - 余弦距离
     })
     .from(chunks) //查询的主表是 chunks
@@ -103,5 +109,9 @@ export async function retrievePublishedChunks(snapshotId: string, question: stri
     .orderBy(distance)//按距离升序排列，距离越小，相似度越高
     .limit(RETRIEVAL_LIMIT); //前六个
 
-  return rows.map((row) => ({ ...row, similarity: Number(row.similarity) }));
+  return rows.map((row) => ({
+    ...row,
+    similarity: Number(row.similarity),
+    sourceLocator: toSourceLocator(row.sourceLocator),
+  }));
 }

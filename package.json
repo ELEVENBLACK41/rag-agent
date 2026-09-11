@@ -32,6 +32,7 @@
     "mammoth": "1.12.2",
     "nanoid": "6.0.1",
     "next": "16.3.4",
+    "pdfjs-dist": "6.3.289",
     "postgres": "3.4.9",
     "radix-ui": "1.6.7",
     "react": "19.2.8",

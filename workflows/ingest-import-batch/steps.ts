@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-10 | 文件说明：VaultAgent 导入批次解析、Embedding 与发布步骤 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 导入批次解析、Embedding 与发布步骤 | edit by：Sliye
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -8,14 +8,17 @@ import { embedMany, gateway } from "ai";
 import { FatalError } from "workflow";
 import { getDatabase } from "@/lib/db/client";
 import { chunks, fileVersions, imports } from "@/lib/db/schema";
-import { parseIndexableText } from "@/lib/ingestion/formats/registry";
+import { parseIndexableDocument } from "@/lib/ingestion/formats/registry";
+import { getErrorMessage } from "@/lib/ingestion/errors";
 import {
-  getBatchTextImports,
+  getBatchIndexableImports,
   markBatchFailed,
+  markImportFailed,
   markImportBatchRunning,
   markImportReady,
   publishImportBatch as publishBatch,
 } from "@/lib/ingestion/imports";
+import { replaceImportDiagnostics } from "@/lib/ingestion/import-diagnostics";
 import { readStoredFile } from "@/lib/storage/files";
 
 /** 经过 DAY1 验证的 Gateway 向量模型。 */
@@ -33,14 +36,14 @@ export async function startBatchImport(batchId: string) {
   await markImportBatchRunning(batchId);
 }
 
-/** 查询当前批次中已注册文本解析器的文件。 */
-export async function listBatchTextImports(batchId: string) {
+/** 查询当前批次中已注册解析器的可索引文件。 */
+export async function listBatchIndexableImports(batchId: string) {
   "use step";
-  return getBatchTextImports(batchId);
+  return getBatchIndexableImports(batchId);
 }
 
 /**
- * 读取一个文本文件、交由格式注册表解析，并幂等保存统一 Chunk。
+ * 读取一个可索引文件、交由格式注册表解析，并幂等保存统一 Chunk。
  *
  * @param importId 文件导入记录标识。
  */
@@ -61,17 +64,28 @@ export async function parseAndStoreChunks(importId: string) {
     .limit(1);
   if (!importRecord) throw new FatalError("Import record does not exist.");
 
-  let text: string;
+  let parsedDocument;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(
+    parsedDocument = await parseIndexableDocument(
+      importRecord.mediaType,
       await readStoredFile(importRecord.storageKey),
     );
-  } catch {
+  } catch (error) {
+    const message = getErrorMessage(
+      error,
+      "The uploaded file cannot be parsed or read.",
+    );
+    console.error("[ingestion:parse] document parsing failed", {
+      importId,
+      mediaType: importRecord.mediaType,
+      error: message,
+    });
     throw new FatalError(
-      "The uploaded text file is not valid UTF-8 or cannot be read.",
+      message,
     );
   }
-  const parsedChunks = parseIndexableText(importRecord.mediaType, text);
+  await replaceImportDiagnostics(importId, parsedDocument.diagnostics);
+  const parsedChunks = parsedDocument.chunks;
   if (!parsedChunks.length)
     throw new FatalError("The uploaded file does not contain indexable text.");
   if (parsedChunks.length > MAX_CHUNKS_PER_FILE)
@@ -98,7 +112,7 @@ export async function parseAndStoreChunks(importId: string) {
 }
 
 /**
- * 按受限批次为已存文本块生成向量，原文不会进入 Workflow 状态。
+ * 按受限批次为已存文档块生成向量，原文不会进入 Workflow 状态。
  *
  * @param importId 文件导入记录标识。
  */
@@ -159,10 +173,16 @@ export async function embedStoredChunks(importId: string) {
   return pendingChunks.length;
 }
 
-/** 将完成解析和向量化的文本文件标记为候选快照就绪。 */
-export async function markTextImportReady(importId: string) {
+/** 将完成解析和向量化的可索引文件标记为候选快照就绪。 */
+export async function markIndexableImportReady(importId: string) {
   "use step";
   await markImportReady(importId);
+}
+
+/** 记录一个文件的具体失败，以便批次状态接口保留真实失败来源。 */
+export async function failIndexableImport(importId: string, message: string) {
+  "use step";
+  await markImportFailed(importId, message);
 }
 
 /** 以一个事务发布候选快照。 */

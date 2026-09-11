@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-10 | 文件说明：VaultAgent D4 多文件与 ZIP 导入面板 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 多文件与 ZIP 导入面板 | edit by：Sliye
  */
 
 import { useRef, useState } from "react";
@@ -35,7 +35,7 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base"><FolderUpIcon className="size-4" /> 导入知识库</CardTitle>
-        <CardDescription>支持多选、拖拽或 ZIP。MD/TXT 会建立索引；图片、PDF、Word、Excel 先作为附件保留。</CardDescription>
+        <CardDescription>支持多选、拖拽或 ZIP。MD/TXT/PDF 会建立索引；图片、Word、Excel 先作为附件保留。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div
@@ -68,12 +68,21 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
         {batch && <BatchStatus status={batch.status} />}
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         {files.length > 0 && <ul className="space-y-2" aria-label="导入文件列表">
-          {files.map((file) => <li className="flex items-center gap-2 text-sm" key={file.id}>
-            {file.mediaType.startsWith("image/") ? <ImageIcon className="size-4 text-muted-foreground" /> : <FileTextIcon className="size-4 text-muted-foreground" />}
-            <span className="min-w-0 flex-1 truncate">{file.sourcePath ?? file.displayName}</span>
-            <Badge variant={file.status === "failed" ? "destructive" : "secondary"}>{getFileStatusLabel(file.status, file.mediaType)}</Badge>
-            {file.status !== "deleted" && <Button aria-label={`删除 ${file.displayName}`} onClick={() => onRemoveFile(file.id)} size="icon-sm" type="button" variant="ghost"><Trash2Icon className="size-4" /></Button>}
-          </li>)}
+          {files.map((file) => (
+            <li className="space-y-1 text-sm" key={file.id}>
+              <div className="flex items-center gap-2">
+                {file.mediaType.startsWith("image/") ? <ImageIcon className="size-4 text-muted-foreground" /> : <FileTextIcon className="size-4 text-muted-foreground" />}
+                <span className="min-w-0 flex-1 truncate">{file.sourcePath ?? file.displayName}</span>
+                <Badge variant={file.status === "failed" ? "destructive" : "secondary"}>{getFileStatusLabel(file.status, file.mediaType)}</Badge>
+                {file.status !== "deleted" && <Button aria-label={`删除 ${file.displayName}`} onClick={() => onRemoveFile(file.id)} size="icon-sm" type="button" variant="ghost"><Trash2Icon className="size-4" /></Button>}
+              </div>
+              {file.diagnostics.map((diagnostic) => (
+                <p className="pl-6 text-xs text-muted-foreground" key={`${diagnostic.stage}-${diagnostic.pageNumber ?? 0}-${diagnostic.message}`}>
+                  {diagnostic.pageNumber ? `第 ${diagnostic.pageNumber} 页：` : ""}{diagnostic.message}
+                </p>
+              ))}
+            </li>
+          ))}
         </ul>}
       </CardContent>
     </Card>
@@ -91,6 +100,7 @@ function BatchStatus({ status }: { status: ImportBatchState["status"] }) {
 }
 
 function getFileStatusLabel(status: string, mediaType: string) {
+  if (status === "completed" && mediaType === "application/pdf") return "已发布";
   if (status === "completed" && !mediaType.startsWith("text/")) return "附件已保存";
   const labels: Record<string, string> = { completed: "已发布", ready: "附件已保存", running: "处理中", queued: "排队中", failed: "失败", deleted: "已删除" };
   return labels[status] ?? status;

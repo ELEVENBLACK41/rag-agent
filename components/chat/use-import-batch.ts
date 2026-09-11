@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-10 | 文件说明：VaultAgent D4 导入批次状态与轮询 Hook | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 导入批次状态与轮询 Hook | edit by：Sliye
  */
 
 import { useState } from "react";
@@ -11,6 +11,12 @@ export type ImportFileState = {
   displayName: string;
   sourcePath: string | null;
   mediaType: string;
+  diagnostics: Array<{
+    severity: "warning";
+    stage: "parse";
+    message: string;
+    pageNumber?: number;
+  }>;
 };
 
 export type ImportBatchState = {
@@ -41,7 +47,7 @@ export function useImportBatch() {
     formData.set("paths", JSON.stringify(files.map((file) => getRelativePath(file))));
 
     try {
-      const response = await fetch("/api/imports/markdown", { method: "POST", body: formData });
+      const response = await fetch("/api/imports", { method: "POST", body: formData });
       const result = (await response.json()) as { batchId?: string; error?: string };
       if (!response.ok || !result.batchId) throw new Error(result.error ?? "无法创建导入任务。");
       await waitForBatch(result.batchId);

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D2-D3 核心业务数据表定义 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 核心业务数据表定义 | edit by：Sliye
  */
 
 import {
@@ -166,6 +166,29 @@ export const imports = pgTable(
   (table) => [index("imports_workspace_status_idx").on(table.workspaceId, table.status)],
 );
 
+/** 一条解析诊断绑定到具体导入记录，可表达 PDF 页级警告而不污染 Chunk 正文。 */
+export const importDiagnostics = pgTable(
+  "import_diagnostics",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    importId: varchar("import_id", { length: 64 })
+      .notNull()
+      .references(() => imports.id, { onDelete: "cascade" }),
+    severity: varchar("severity", { length: 16 }).notNull(),
+    stage: varchar("stage", { length: 16 }).notNull(),
+    pageNumber: integer("page_number"),
+    message: text("message").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("import_diagnostics_import_id_idx").on(table.importId),
+    index("import_diagnostics_import_page_idx").on(
+      table.importId,
+      table.pageNumber,
+    ),
+  ],
+);
+
 export const chunks = pgTable(
   "chunks",
   {
@@ -179,8 +202,9 @@ export const chunks = pgTable(
     ordinal: integer("ordinal").notNull(),
     content: text("content").notNull(),
     contentHash: varchar("content_hash", { length: 64 }).notNull(),
-    startLine: integer("start_line").notNull(),
-    endLine: integer("end_line").notNull(),
+    /** PDF 没有稳定行号，物理页码保存在 sourceLocator。 */
+    startLine: integer("start_line"),
+    endLine: integer("end_line"),
     /** 标题路径、Block ID 及链接/附件目标，供可复现引用和后续原文抽屉使用。 */
     sourceLocator: jsonb("source_locator").notNull().default({}),
     embedding: vector("embedding"),

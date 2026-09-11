@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 单文件知识库聊天工作台 | edit by：Sliye
+ * 修改时间：2026-09-11 | 文件说明：VaultAgent 知识库聊天工作台 | edit by：Sliye
  */
 
 "use client";
@@ -28,8 +28,9 @@ import { FileTextIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-re
 type Citation = {
   id: number;
   displayName: string;
-  startLine: number;
-  endLine: number;
+  startLine: number | null;
+  endLine: number | null;
+  sourceLocator: { format: string; pageNumber?: number } | null;
 };
 
 type ChatMessage = {
@@ -203,7 +204,7 @@ export function VaultWorkspace() {
                       message.content
                     }
                   </MessageContent>
-                  {message.role === "assistant" && message.citations && message.citations.length > 0 && <div className="flex flex-wrap gap-2">{message.citations.map((citation) => <Badge className="gap-1" key={citation.id} variant="secondary"><FileTextIcon className="size-3" />【{citation.id}】{citation.displayName} · {citation.startLine}-{citation.endLine} 行</Badge>)}</div>}
+                  {message.role === "assistant" && message.citations && message.citations.length > 0 && <div className="flex flex-wrap gap-2">{message.citations.map((citation) => <Badge className="gap-1" key={citation.id} variant="secondary"><FileTextIcon className="size-3" />【{citation.id}】{citation.displayName} · {getCitationLocation(citation)}</Badge>)}</div>}
                 </Message>
               ))}
             </ConversationContent>
@@ -218,6 +219,15 @@ export function VaultWorkspace() {
       </section>
     </main>
   );
+}
+
+/** 将不同格式的来源定位转为聊天引用标签，历史行号引用继续可读。 */
+function getCitationLocation(citation: Citation) {
+  if (citation.sourceLocator?.format === "pdf" && citation.sourceLocator.pageNumber)
+    return `第 ${citation.sourceLocator.pageNumber} 页`;
+  if (citation.startLine !== null && citation.endLine !== null)
+    return `${citation.startLine}-${citation.endLine} 行`;
+  return "位置不可用";
 }
 
 /** 读取 SSE 响应中的 event/data 帧。 */

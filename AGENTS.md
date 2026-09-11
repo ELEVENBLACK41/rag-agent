@@ -1,13 +1,3 @@
-<!--
- * @Author: shaoliye shaoliye@fengmap.com
- * @Date: 2026-09-07 13:41:54
- * @LastEditors: shaoliye shaoliye@fengmap.com
- * @LastEditTime: 2026-09-10 16:59:28
- * @FilePath: \rag-agent\AGENTS.md
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
--->
-<!-- 修改时间：2026-09-04 | 文件说明：VaultAgent 项目协作与开发规范 | edit by：Codex -->
-
 # VaultAgent 开发规范
 
 # 
@@ -57,6 +47,7 @@
 - API 用法以已安装版本和官方文档为准，不凭旧记忆编造；不使用 `@ts-ignore` 等手段掩盖版本错误。
 - 命名明确、类型准确，避免无必要的 `any`、复制粘贴和失效注释。
 - 尤其注意文件结构 保持规范 清晰 让人能够一眼看出分层管理，便于迭代，解耦等等
+- 尽量不要删除我写的对的代码注释
 
 ## 数据与验证
 - 业务路径中不保留测试数据、假回复、Mock 接口或硬编码演示结果。
