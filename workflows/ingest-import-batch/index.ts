@@ -24,21 +24,43 @@ export async function ingestImportBatchWorkflow(batchId: string) {
   "use workflow";
 
   try {
+    /**
+     * 第一个step 
+     * 批次：queued → running
+     * 可索引文件：queued → running
+     * 附件：保持 ready
+     * 
+     * */
     await startBatchImport(batchId);
+    //找出本批需要处理得文件，按 MIME 类型筛选
     const indexableImports = await listBatchIndexableImports(batchId);
     let embeddedChunkCount = 0;
+    //这个循环为捉个文件处理，串行处理
     for (const indexableImport of indexableImports) {
       try {
+        /**
+         * 解析并保存 Chunk
+         * importId -> 查询 imports + file_versions -> 拿到 storageKey、mediaType、snapshotId ->> 从本地磁盘或 Blob 读取文件 bytes ->> 按 MIME 分派对应解析器
+         */
+        
         await parseAndStoreChunks(indexableImport.id);
+        /**
+         * pdf视觉分析,只处理 PDF，并且只查询 import_diagnostics.code = no-text-layer
+         */
         await analyzeIndexableImportVisualPages(indexableImport.id);
+        /**
+         * Embedding  查询当前文件版本下所有embedding IS NULL
+         */
         embeddedChunkCount += await embedStoredChunks(indexableImport.id);
+        //文件就绪 imports.status = running ->> ready
         await markIndexableImportReady(indexableImport.id);
       } catch (error) {
         const message = getErrorMessage(error, "Import file failed.");
         await failIndexableImport(indexableImport.id, message);
         throw error;
       }
-    }
+    } 
+    // 所有可索引文件都 ready后发布整个批次
     await publishImportBatch(batchId);
     return { embeddedChunkCount };
   } catch (error) {

@@ -38,16 +38,28 @@ export async function POST(request: Request) {
       (item): item is File => item instanceof File,
     );
     const paths = parseRelativePaths(formData.get("paths"), uploads.length);
+    //走文件导入逻辑
     const files = await collectVaultUploadFiles(
+      /**
+       * 遍历所有上传文件
+       * file：浏览器 FormData 里的原始 File 对象，包含文件名、大小、MIME 和读取文件字节的方法
+       * index：当前文件在上传数组中的位置，用来和 paths[index] 配对
+       * 交给collectVaultUploadFiles去判断检查，是否合法，如：是否至少一个文件，是否超过50个文件等等 大小
+       */
       uploads.map((file, index) => ({
         file,
         relativePath: paths[index] ?? file.name,
       })),
     );
+
+    /**
+     * 把已校验的上传文件真正登记为一次待处理的导入批次，并先把原始文件写入存储；成功后才允许 Workflow 开始解析
+     */
     const createdBatch = await createLocalImportBatch(files);
 
     try {
       // https://useworkflow.dev/docs/api-reference/workflow-api/start
+      //开启workflow “解析 → 可选视觉分析 → 向量化 → 快照发布”处理本批文件。
       const run = await start(ingestImportBatchWorkflow, [createdBatch.batchId]);
       await setImportBatchWorkflowRun(createdBatch.batchId, run.runId);
       return Response.json(

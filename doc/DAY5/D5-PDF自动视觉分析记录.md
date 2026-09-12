@@ -1,4 +1,4 @@
-<!-- 修改时间：2026-09-11 | 文件说明：VaultAgent DAY5 第二阶段 PDF 自动视觉分析实施与验收记录 | edit by：Sliye -->
+<!-- 修改时间：2026-09-12 | 文件说明：VaultAgent DAY5 第二阶段 PDF 自动视觉分析实施与验收记录 | edit by：Sliye -->
 
 # DAY5 第二阶段：PDF 自动视觉分析记录
 
@@ -38,6 +38,13 @@
 首次上传 fixture 时，`parsePdf()` 已正确产生 `no-text-layer`，但 `replaceImportDiagnostics()` 漏写了诊断 code 列，数据库默认值将其写成 `text-extraction-failed`。视觉候选查询因此找不到该页，`visual_assets` 没有创建。
 
 已修复：持久化诊断时写入 `diagnostic.code`。重新上传 fixture 后，第 2 页会进入自动视觉候选；旧导入记录不会自动回放 Workflow。
+
+## 2026-09-12：视觉能力拆分收口
+
+- `visual/pdf-page-renderer.ts` 统一负责 PDF 物理页到有界 PNG 的转换；PDF.js 加载、分辨率限制、页码校验和资源释放不再留在业务编排文件中。
+- `visual/analyze-image.ts` 统一负责 PNG/JPEG 到结构化描述的 Gateway 调用，并公开模型与提示词版本；PDF 视觉分析已改用该入口。
+- `visual/pdf-page-analysis.ts` 仅保留 PDF 无文本页候选、批次限额、派生资产持久化、失败记录和视觉 Chunk 写入。
+- 本次没有宣称 DOCX、XLSX 或 Markdown 已能提取图片；这些格式后续只需各自提取受限图片字节和来源定位，再调用 `analyzeImage()`，无需复制模型调用或 PDF 渲染代码。
 
 ## 待联调
 
