@@ -45,7 +45,9 @@ export async function ingestImportBatchWorkflow(batchId: string) {
         
         await parseAndStoreChunks(indexableImport.id);
         /**
-         * pdf视觉分析,只处理 PDF，并且只查询 import_diagnostics.code = no-text-layer
+         * 当前仅对 PDF 的无文本页做视觉分析。
+         * Markdown、DOCX、XLSX 与独立图片的视觉候选提取、来源定位和资产持久化尚未接入；
+         * 它们后续复用 analyzeImage()，不重复实现模型调用。
          */
         await analyzeIndexableImportVisualPages(indexableImport.id);
         /**
