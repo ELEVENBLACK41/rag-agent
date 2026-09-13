@@ -1,11 +1,17 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 导入批次 Durable Workflow 编排入口 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 导入批次 Durable Workflow 编排入口。
+ *
+ * 编排层只决定可恢复步骤顺序与批次原子发布；格式细节、视觉资产与向量模型
+ * 分别停留在所属领域模块，避免 DAY6 接入 DOCX 后膨胀为格式判断中心。
+ *
+ * edit by：Sliye
  */
 
 import { getErrorMessage } from "@/lib/ingestion/errors";
 import {
   embedStoredChunks,
-  analyzeIndexableImportVisualPages,
+  analyzeIndexableImportVisualAssets,
   failIndexableImport,
   failImportBatch,
   listBatchIndexableImports,
@@ -44,12 +50,11 @@ export async function ingestImportBatchWorkflow(batchId: string) {
          */
         
         await parseAndStoreChunks(indexableImport.id);
-        /**
-         * 当前仅对 PDF 的无文本页做视觉分析。
-         * Markdown、DOCX、XLSX 与独立图片的视觉候选提取、来源定位和资产持久化尚未接入；
-         * 它们后续复用 analyzeImage()，不重复实现模型调用。
-         */
-        await analyzeIndexableImportVisualPages(indexableImport.id);
+        /** PDF 无文本页与 DOCX 内嵌图片各自挑选候选，复用同一视觉资产持久化入口。 */
+        await analyzeIndexableImportVisualAssets(
+          indexableImport.id,
+          indexableImport.mediaType,
+        );
         /**
          * Embedding  查询当前文件版本下所有embedding IS NULL
          */

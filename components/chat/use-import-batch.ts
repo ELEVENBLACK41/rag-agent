@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 导入批次状态与轮询 Hook | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 导入批次状态与轮询 Hook。
+ *
+ * Hook 只管理浏览器上传、轮询和删除后的视图状态；服务端返回的诊断与视觉
+ * 资产保持原样，便于新增格式时不在客户端复制业务判断。
+ *
+ * edit by：Sliye
  */
 
 import { useState } from "react";
@@ -18,7 +24,8 @@ export type ImportFileState = {
     pageNumber?: number;
   }>;
   visualAssets: Array<{
-    pageNumber: number;
+    pageNumber: number | null;
+    sourceKey: string;
     status: string;
     errorMessage: string | null;
   }>;

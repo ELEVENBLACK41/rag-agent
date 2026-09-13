@@ -1,6 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 支持格式与导入职责声明 | edit by：Sliye
- * 文件得格式识别与职责分配中心，供 intake.ts 与 workflows/ingest-import-batch/steps.ts 共用
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 支持格式与导入职责声明。
+ *
+ * 文件扩展名只在安全上传边界映射为 MIME 与职责；Workflow 和解析器只使用
+ * 这里导出的可索引 MIME 集合，避免多个模块各自维护格式白名单。
+ *
+ * edit by：Sliye
  */
 
 import path from "node:path";
@@ -24,6 +29,8 @@ export const INDEXABLE_MEDIA_TYPES = [
   "text/markdown",
   "text/plain",
   "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ] as const;
 
 const FILE_TYPES: Record<string, ImportFileType> = {
@@ -34,16 +41,17 @@ const FILE_TYPES: Record<string, ImportFileType> = {
   ".jpeg": { mediaType: "image/jpeg", kind: "attachment" },
   /** PDF 文本层由 D5 解析器按物理页建立索引。 */
   ".pdf": { mediaType: "application/pdf", kind: "index" },
-  /** D6-D7 接入对应解析器前，仅安全保存为附件。 */
+  /** 使用 Mammoth 读取常规正文/表格，并受限分析内嵌 PNG/JPEG。 */
   ".docx": {
     mediaType:
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    kind: "attachment",
+    kind: "index",
   },
   ".xlsx": {
     mediaType:
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    kind: "attachment",
+    /** D7 起读取基础工作表、单元格、公式缓存值与内嵌 PNG/JPEG。 */
+    kind: "index",
   },
 };
 

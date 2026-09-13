@@ -43,6 +43,13 @@
       "when": 1789118331894,
       "tag": "0005_narrow_true_believers",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789216884162,
+      "tag": "0006_woozy_exiles",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 知识库聊天工作台 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 知识库聊天工作台。
+ *
+ * 页面组合导入面板、聊天流和引用标签；定位展示使用服务端传来的来源类型，
+ * 使 PDF 页码、DOCX 段落/表格和视觉图片都能保持可复现而不混用行号。
+ *
+ * edit by：Sliye
  */
 
 "use client";
@@ -30,7 +36,17 @@ type Citation = {
   displayName: string;
   startLine: number | null;
   endLine: number | null;
-  sourceLocator: { format: string; pageNumber?: number } | null;
+  sourceLocator: {
+    format: string;
+    pageNumber?: number;
+    blockType?: "paragraph" | "table";
+    blockIndex?: number;
+    tableIndex?: number;
+    imageIndex?: number;
+    sheetName?: string;
+    range?: string;
+    anchor?: string;
+  } | null;
 };
 
 type ChatMessage = {
@@ -169,7 +185,7 @@ export function VaultWorkspace() {
     <main className="flex min-h-screen bg-background text-foreground">
       <aside className="hidden w-80 shrink-0 border-r border-border bg-card lg:block">
         <div className="flex h-full flex-col gap-5 p-5">
-          <div className="space-y-1"><p className="text-lg font-semibold">VaultAgent</p><p className="text-sm text-muted-foreground">D4 · 多文件知识问答</p></div>
+          <div className="space-y-1"><p className="text-lg font-semibold">VaultAgent</p><p className="text-sm text-muted-foreground">多格式知识问答</p></div>
           <Button className="w-full" onClick={startNewConversation} type="button" variant="outline"><PlusIcon className="size-4" /> 新建会话</Button>
           <Separator />
           <ImportPanel batch={batch} error={importError} isUploading={isUploading} onRemoveFile={removeFile} onUpload={upload} />
@@ -179,7 +195,7 @@ export function VaultWorkspace() {
 
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-border px-5 py-4">
-          <div><h1 className="font-semibold">我的知识库</h1><p className="text-sm text-muted-foreground">单轮真实检索、流式回答与行号引用</p></div>
+          <div><h1 className="font-semibold">我的知识库</h1><p className="text-sm text-muted-foreground">单轮真实检索、流式回答与来源定位引用</p></div>
           {conversationId && <Button disabled={isStreaming} onClick={removeConversation} size="sm" type="button" variant="ghost"><Trash2Icon className="size-4" /> 删除会话</Button>}
         </header>
         <div className="border-b border-border px-5 py-3 lg:hidden">
@@ -188,7 +204,7 @@ export function VaultWorkspace() {
         <div className="flex min-h-0 flex-1 flex-col">
           <Conversation className="min-h-0 flex-1">
             <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-5 py-8">
-              {messages.length === 0 ? <ConversationEmptyState description={canChat ? "输入问题，VaultAgent 会检索已导入资料并给出行号引用。" : "请先导入并完成一批 Markdown 或 TXT 文件的索引。"} icon={<MessageSquareIcon className="size-10" />} title="开始你的知识库对话" /> : messages.map((message) => (
+              {messages.length === 0 ? <ConversationEmptyState description={canChat ? "输入问题，VaultAgent 会检索已导入资料并给出可回溯引用。" : "请先导入并完成一批可索引文件的导入。"} icon={<MessageSquareIcon className="size-10" />} title="开始你的知识库对话" /> : messages.map((message) => (
                 <Message from={message.role} key={message.id}>
                   <MessageContent>
                     {message.role === "assistant" ? 
@@ -227,6 +243,18 @@ function getCitationLocation(citation: Citation) {
     return `第 ${citation.sourceLocator.pageNumber} 页`;
   if (citation.sourceLocator?.format === "pdf-visual" && citation.sourceLocator.pageNumber)
     return `第 ${citation.sourceLocator.pageNumber} 页 · 视觉分析`;
+  if (citation.sourceLocator?.format === "docx") {
+    const block = citation.sourceLocator.blockType === "table"
+      ? `表格 ${citation.sourceLocator.tableIndex ?? citation.sourceLocator.blockIndex ?? ""}`
+      : `段落 ${citation.sourceLocator.blockIndex ?? ""}`;
+    return block.trim();
+  }
+  if (citation.sourceLocator?.format === "docx-visual" && citation.sourceLocator.imageIndex)
+    return `内嵌图片 ${citation.sourceLocator.imageIndex} · 视觉分析`;
+  if (citation.sourceLocator?.format === "xlsx" && citation.sourceLocator.sheetName && citation.sourceLocator.range)
+    return `工作表 ${citation.sourceLocator.sheetName} · ${citation.sourceLocator.range}`;
+  if (citation.sourceLocator?.format === "xlsx-visual" && citation.sourceLocator.sheetName && citation.sourceLocator.anchor && citation.sourceLocator.imageIndex)
+    return `工作表 ${citation.sourceLocator.sheetName} · ${citation.sourceLocator.anchor} · 内嵌图片 ${citation.sourceLocator.imageIndex} · 视觉分析`;
   if (citation.startLine !== null && citation.endLine !== null)
     return `${citation.startLine}-${citation.endLine} 行`;
   return "位置不可用";

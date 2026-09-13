@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 跨格式视觉资产来源与分析结果类型 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 跨格式视觉资产来源与分析结果类型。
+ *
+ * 来源键与来源定位属于原始文件版本，模型结果只是其派生数据。新的格式只需
+ * 声明自己的来源定位，即可复用同一套存储、限额与视觉模型调用。
+ *
+ * edit by：Sliye
  */
 
 /** 派生视觉资产在父文件中的可复现位置。 */
@@ -7,7 +13,12 @@ export type VisualSourceLocator =
   | { kind: "pdf-page"; pageNumber: number }
   | { kind: "markdown-image"; sourcePath: string; lineNumber?: number }
   | { kind: "document-image"; imageIndex: number }
-  | { kind: "worksheet-image"; sheetName: string; anchor: string };
+  | {
+      kind: "worksheet-image";
+      sheetName: string;
+      anchor: string;
+      imageIndex: number;
+    };
 
 /** 视觉模型输出的有界描述，不能替代原始文本证据。 */
 export type VisualAnalysis = {
@@ -26,6 +37,6 @@ export function createVisualSourceKey(locator: VisualSourceLocator) {
     case "document-image":
       return `document-image:${locator.imageIndex}`;
     case "worksheet-image":
-      return `worksheet-image:${locator.sheetName}:${locator.anchor}`;
+      return `worksheet-image:${encodeURIComponent(locator.sheetName)}:${locator.anchor}:${locator.imageIndex}`;
   }
 }

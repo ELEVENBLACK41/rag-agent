@@ -1,5 +1,10 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 单轮检索问答 Run 与事件持久化
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 单轮检索问答 Run 与事件持久化。
+ *
+ * 此文件固定一次问答的资料快照、流式事件和引用信息；格式专属定位由解析层
+ * 传入并在这里转换为模型与用户可理解的简短描述，不承担文件格式解析职责。
+ *
  * 此文件为一次问答的执行核心编排文件，结合 lib/retrieval/search.ts 进行检索，并结合 ai-sdk-core 进行模型生成回答
  * 主要负责：
  * 创建单轮问答 Run
@@ -8,7 +13,7 @@
  * 将回答锃亮推送给浏览器
  * 持久化消息，引用，和执行事件
  * 处理失败，短线，会话删除
- *  | edit by：Sliye
+ * edit by：Sliye
  */
 
 import { randomUUID } from "node:crypto";
@@ -278,6 +283,17 @@ function describeSourceLocation(source: RetrievedChunk) {
     return `第 ${source.sourceLocator.pageNumber} 页`;
   if (source.sourceLocator?.format === "pdf-visual")
     return `第 ${source.sourceLocator.pageNumber} 页 · 视觉分析`;
+  if (source.sourceLocator?.format === "docx") {
+    if (source.sourceLocator.blockType === "table")
+      return `表格 ${source.sourceLocator.tableIndex ?? source.sourceLocator.blockIndex}`;
+    return `段落 ${source.sourceLocator.blockIndex}`;
+  }
+  if (source.sourceLocator?.format === "docx-visual")
+    return `内嵌图片 ${source.sourceLocator.imageIndex} · 视觉分析`;
+  if (source.sourceLocator?.format === "xlsx")
+    return `工作表 ${source.sourceLocator.sheetName} · ${source.sourceLocator.range}`;
+  if (source.sourceLocator?.format === "xlsx-visual")
+    return `工作表 ${source.sourceLocator.sheetName} · ${source.sourceLocator.anchor} · 内嵌图片 ${source.sourceLocator.imageIndex} · 视觉分析`;
   if (source.startLine !== null && source.endLine !== null)
     return `第 ${source.startLine}-${source.endLine} 行`;
   return "位置不可用";

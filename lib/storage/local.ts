@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent 本地私有文件存储 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 本地私有文件存储。
+ *
+ * 原始文件与模型派生资产都以服务端生成的键写入 DATA_DIR；任何上传文件名都
+ * 不参与物理路径构造，避免路径穿越和不同存储实现之间的命名漂移。
+ *
+ * edit by：Sliye
  */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -39,9 +45,14 @@ export function createStorageKey(workspaceId: string, fileVersionId: string) {
   return path.posix.join(workspaceId, "files", `${fileVersionId}.md`);
 }
 
-/** 为渲染图等派生资产创建服务器控制的 PNG 存储键。 */
-export function createDerivedStorageKey(workspaceId: string, assetId: string) {
-  return path.posix.join(workspaceId, "derived", `${assetId}.png`);
+/** 为渲染图等派生资产创建服务器控制的文件名，扩展名只来自已校验的 MIME。 */
+export function createDerivedStorageKey(
+  workspaceId: string,
+  assetId: string,
+  mediaType: "image/png" | "image/jpeg" = "image/png",
+) {
+  const extension = mediaType === "image/jpeg" ? "jpg" : "png";
+  return path.posix.join(workspaceId, "derived", `${assetId}.${extension}`);
 }
 
 /**

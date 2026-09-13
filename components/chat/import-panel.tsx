@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 多文件与 ZIP 导入面板 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 多文件与 ZIP 导入面板。
+ *
+ * 面板展示批次真实状态、格式解析警告和视觉资产进度；它不根据文件扩展名
+ * 推测能力，所有可见状态均来自服务端已持久化的导入记录。
+ *
+ * edit by：Sliye
  */
 
 import { useRef, useState } from "react";
@@ -35,7 +41,7 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base"><FolderUpIcon className="size-4" /> 导入知识库</CardTitle>
-        <CardDescription>支持多选、拖拽或 ZIP。MD/TXT/PDF 会建立索引；图片、Word、Excel 先作为附件保留。</CardDescription>
+        <CardDescription>支持多选、拖拽或 ZIP。MD、TXT、PDF、DOCX 和 XLSX 会建立索引；图片作为附件保留。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div
@@ -82,8 +88,8 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
                 </p>
               ))}
               {file.visualAssets.map((asset) => (
-                <p className="pl-6 text-xs text-muted-foreground" key={`visual-${asset.pageNumber}`}>
-                  第 {asset.pageNumber} 页视觉分析：{getVisualAssetLabel(asset.status, asset.errorMessage)}
+                <p className="pl-6 text-xs text-muted-foreground" key={`visual-${asset.sourceKey}`}>
+                  {getVisualAssetLocation(asset.sourceKey, asset.pageNumber)}视觉分析：{getVisualAssetLabel(asset.status, asset.errorMessage)}
                 </p>
               ))}
             </li>
@@ -105,10 +111,28 @@ function BatchStatus({ status }: { status: ImportBatchState["status"] }) {
 }
 
 function getFileStatusLabel(status: string, mediaType: string) {
-  if (status === "completed" && mediaType === "application/pdf") return "已发布";
+  if (status === "completed" && [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ].includes(mediaType)) return "已发布";
   if (status === "completed" && !mediaType.startsWith("text/")) return "附件已保存";
   const labels: Record<string, string> = { completed: "已发布", ready: "附件已保存", running: "处理中", queued: "排队中", failed: "失败", deleted: "已删除" };
   return labels[status] ?? status;
+}
+
+/** 将跨格式视觉来源键转为简短、可核对的位置标签。 */
+function getVisualAssetLocation(sourceKey: string, pageNumber: number | null) {
+  if (pageNumber) return `第 ${pageNumber} 页`;
+  const imageIndex = /^document-image:(\d+)$/.exec(sourceKey)?.[1];
+  if (imageIndex) return `内嵌图片 ${imageIndex}`;
+  const worksheetImage = /^worksheet-image:([^:]+):([A-Z]+\d+):(\d+)$/.exec(sourceKey);
+  if (!worksheetImage) return "派生图片";
+  try {
+    return `工作表 ${decodeURIComponent(worksheetImage[1])} · ${worksheetImage[2]} · 内嵌图片 ${worksheetImage[3]}`;
+  } catch {
+    return "工作表内嵌图片";
+  }
 }
 
 /** 将视觉分析的后台状态转换为导入面板可见文字。 */

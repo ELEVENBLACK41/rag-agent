@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 核心业务数据表定义 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 核心业务数据表定义。
+ *
+ * 表定义覆盖不可变文件版本、候选快照、解析 Chunk 与视觉派生资产。视觉资产以
+ * 来源键而非 PDF 页码唯一化，使 DOCX/XLSX 等格式可以复用同一持久化边界。
+ *
+ * edit by：Sliye
  */
 
 import {
@@ -192,7 +198,7 @@ export const importDiagnostics = pgTable(
   ],
 );
 
-/** PDF 页渲染图及其有界视觉分析结果；原图与模型派生内容分字段保存。 */
+/** 跨格式派生图片及其有界视觉分析结果；来源键保证同一文件版本可幂等重放。 */
 export const visualAssets = pgTable(
   "visual_assets",
   {
@@ -203,7 +209,12 @@ export const visualAssets = pgTable(
     fileVersionId: varchar("file_version_id", { length: 64 })
       .notNull()
       .references(() => fileVersions.id, { onDelete: "cascade" }),
-    pageNumber: integer("page_number").notNull(),
+    /** 格式无关的稳定来源键，例如 pdf-page:2、document-image:1。 */
+    sourceKey: text("source_key").notNull(),
+    /** 只保存可回溯到父文件版本的位置，不把模型输出当作原始事实。 */
+    sourceLocator: jsonb("source_locator").notNull(),
+    /** PDF 保留物理页的快速展示字段；DOCX/XLSX 图片为空。 */
+    pageNumber: integer("page_number"),
     mediaType: varchar("media_type", { length: 127 }).notNull(),
     storageKey: text("storage_key").notNull(),
     contentHash: varchar("content_hash", { length: 64 }).notNull(),
@@ -218,9 +229,9 @@ export const visualAssets = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (table) => [
-    uniqueIndex("visual_assets_file_version_page_uq").on(
+    uniqueIndex("visual_assets_file_version_source_uq").on(
       table.fileVersionId,
-      table.pageNumber,
+      table.sourceKey,
     ),
     index("visual_assets_import_id_idx").on(table.importId),
   ],

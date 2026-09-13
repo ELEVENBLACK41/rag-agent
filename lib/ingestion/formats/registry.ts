@@ -1,10 +1,18 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 可索引文档解析器注册表 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 可索引文档解析器注册表。
+ *
+ * Workflow 只经由本表分派原始字节，文本与二进制格式因此各自在所属解析器中
+ * 处理编码和结构，不让上游因格式增加而出现条件分支。
+ *
+ * edit by：Sliye
  */
 
 import { parseMarkdown } from "@/lib/ingestion/formats/markdown";
+import { parseDocx } from "@/lib/ingestion/formats/docx";
 import { parsePdf } from "@/lib/ingestion/formats/pdf";
 import { parsePlainText } from "@/lib/ingestion/formats/txt";
+import { parseXlsx } from "@/lib/ingestion/formats/xlsx";
 import type {
   ParsedDocument,
   ParsedTextChunk,
@@ -17,6 +25,8 @@ const DOCUMENT_PARSERS: Record<string, DocumentParser> = {
   "text/markdown": (bytes) => parseUtf8Text(bytes, parseMarkdown),
   "text/plain": (bytes) => parseUtf8Text(bytes, parsePlainText),
   "application/pdf": parsePdf,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": parseDocx,
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": parseXlsx,
 };
 
 /**

@@ -1,5 +1,11 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 多文件导入批次、版本与快照发布 | edit by：Sliye
+ * 修改时间：2026-09-12
+ * 文件说明：VaultAgent 多文件导入批次、版本与候选快照发布。
+ *
+ * 此模块是文件版本、批次状态和快照原子切换的业务事实来源；格式解析与视觉
+ * 模型调用不在此处实现，只汇总它们已持久化的用户可见状态。
+ *
+ * edit by：Sliye
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -198,12 +204,13 @@ export async function getLocalImportBatchStatus(batchId: string) {
         .select({
           importId: visualAssets.importId,
           pageNumber: visualAssets.pageNumber,
+          sourceKey: visualAssets.sourceKey,
           status: visualAssets.status,
           errorMessage: visualAssets.errorMessage,
         })
         .from(visualAssets)
         .where(inArray(visualAssets.importId, files.map((file) => file.id)))
-        .orderBy(visualAssets.pageNumber)
+        .orderBy(visualAssets.sourceKey)
     : [];
   const visualAssetsByImport = new Map<string, typeof visualAssetRecords>();
   for (const asset of visualAssetRecords) {
@@ -324,7 +331,7 @@ export async function deleteLocalImport(importId: string) {
 /** 供 Workflow 读取本批次待处理的已注册可索引文件。 */
 export async function getBatchIndexableImports(batchId: string) {
   return getDatabase()
-    .select({ id: imports.id })
+    .select({ id: imports.id, mediaType: fileVersions.mediaType })
     .from(imports)
     .innerJoin(fileVersions, eq(imports.fileVersionId, fileVersions.id))
     .where(

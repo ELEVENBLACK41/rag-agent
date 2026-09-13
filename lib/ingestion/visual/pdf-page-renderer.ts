@@ -1,16 +1,14 @@
 /**
- * 修改时间：2026-09-12 | 文件说明：VaultAgent PDF 物理页到 PNG 的受限视觉渲染器 | edit by：Sliye
+ * 修改时间：2026-09-13 | 文件说明：VaultAgent PDF 物理页到 PNG 的受限视觉渲染器 | edit by：Sliye
  */
 
 import { createCanvas } from "@napi-rs/canvas";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-
-/** 单张 PDF 渲染图的最大像素数。 */
-const MAX_RENDER_PIXELS = 2_000_000;
-/** 单张 PDF 渲染图长边上限。 */
-const MAX_RENDER_EDGE = 2_048;
-/** PDF 页渲染默认倍率。 */
-const DEFAULT_RENDER_SCALE = 1.5;
+import {
+  MAX_VISUAL_IMAGE_PIXELS,
+  PDF_RENDER_DEFAULT_SCALE,
+  PDF_RENDER_MAX_EDGE_PIXELS,
+} from "@/lib/ingestion/visual/limits";
 
 /** PDF 页面视觉分析前生成的受限 PNG。 */
 export type RenderedPdfPage = {
@@ -74,7 +72,7 @@ export async function renderPdfPage(
 
 /** 根据像素总量与最长边限制计算渲染倍率。 */
 function getRenderScale(width: number, height: number) {
-  const pixelScale = Math.sqrt(MAX_RENDER_PIXELS / (width * height));
-  const edgeScale = MAX_RENDER_EDGE / Math.max(width, height);
-  return Math.min(DEFAULT_RENDER_SCALE, pixelScale, edgeScale);
+  const pixelScale = Math.sqrt(MAX_VISUAL_IMAGE_PIXELS / (width * height));
+  const edgeScale = PDF_RENDER_MAX_EDGE_PIXELS / Math.max(width, height);
+  return Math.min(PDF_RENDER_DEFAULT_SCALE, pixelScale, edgeScale);
 }
