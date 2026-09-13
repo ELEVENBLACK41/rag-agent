@@ -6,7 +6,7 @@ lib/ingestion/
 ├─ source-path.ts     路径安全校验
 ├─ formats/
 │  ├─ file-types.ts   MD/TXT/PDF/DOCX/XLSX/图片职责声明
-│  ├─ markdown.ts
+│  ├─ markdown.ts         标题、段落、代码块与 Obsidian 定位
 │  ├─ docx.ts         常规 DOCX 标题、段落与基础表格解析
 │  ├─ xlsx.ts         基础 XLSX 工作表、单元格、公式缓存值与容器校验
 │  ├─ txt.ts

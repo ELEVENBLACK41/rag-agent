@@ -24,7 +24,7 @@ import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
 import {
   getLatestPublishedSnapshot,
-  retrievePublishedChunks,
+  retrievePublishedChunksWithTrace,
   type RetrievedChunk,
 } from "@/lib/retrieval/search";
 import type { SourceLocator } from "@/lib/ingestion/formats/types";
@@ -149,7 +149,12 @@ export async function* executeChatRun(
   try {
     yield await createStageEvent(chatRun.runId, "正在检索已发布的知识库快照。");
     //开始调用search了，给快照id和用户的prompt 去搜索
-    const sources = await retrievePublishedChunks(chatRun.snapshotId, question);
+    const retrieval = await retrievePublishedChunksWithTrace(
+      chatRun.snapshotId,
+      question,
+    );
+    await appendRunEvent(chatRun.runId, "retrieval_trace", retrieval.trace);
+    const sources = retrieval.chunks;
     
     if (!sources.length) throw new Error("当前资料中没有可用于回答的已索引文本块。");
     //整理一下返回得字段，把相似的啥的先剔除
@@ -300,7 +305,7 @@ function describeSourceLocation(source: RetrievedChunk) {
 }
 
 /** 按单 Run 的单调序号写入事件。D3 每个 Run 只有一个执行器，不产生并发写入 未来会扩展 */
-async function appendRunEvent(runId: string, eventType: string, payload: Record<string, unknown>) {
+async function appendRunEvent(runId: string, eventType: string, payload: object) {
   const db = getDatabase();
   const [lastEvent] = await db
     .select({ sequence: runEvents.sequence })

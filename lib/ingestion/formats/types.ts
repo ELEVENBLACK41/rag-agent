@@ -15,6 +15,10 @@ export type TextSourceLocator = {
   blockIds: string[];
   links: string[];
   attachments: string[];
+  /** DAY8 新写入的 Markdown 块类型；旧索引记录不存在该字段。 */
+  contentKind?: "paragraph" | "code";
+  /** fenced code block 的语言标签，仅 contentKind 为 code 时可能存在。 */
+  codeLanguage?: string;
 };
 
 /** PDF 文本块固定绑定到原始 PDF 的物理页码。 */
@@ -163,7 +167,11 @@ export function toSourceLocator(value: unknown): SourceLocator | null {
     Array.isArray(locator.headingPath) &&
     Array.isArray(locator.blockIds) &&
     Array.isArray(locator.links) &&
-    Array.isArray(locator.attachments)
+    Array.isArray(locator.attachments) &&
+    (locator.contentKind === undefined ||
+      locator.contentKind === "paragraph" ||
+      locator.contentKind === "code") &&
+    (locator.codeLanguage === undefined || typeof locator.codeLanguage === "string")
   ) {
     return locator as SourceLocator;
   }

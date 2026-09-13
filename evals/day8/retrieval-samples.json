@@ -1,0 +1,62 @@
+{
+  "datasetVersion": "day8-fixtures-v1",
+  "description": "DAY8 开发集：只使用仓库内无敏感 fixture，相关证据按文件和可复现位置标注。",
+  "samples": [
+    {
+      "id": "markdown-link-and-block-id",
+      "question": "D4 样本关联到哪一份资料，并且它的 Block ID 是什么？",
+      "expectedEvidence": [
+        {
+          "file": "fixtures/d4/vault-a.md",
+          "locator": {
+            "format": "markdown",
+            "headingPath": ["VaultAgent D4 样本"],
+            "blockId": "d4-vault-a"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pdf-page-location",
+      "question": "PDF 文本页中的内容应该如何定位？",
+      "expectedEvidence": [
+        {
+          "file": "fixtures/pdf/vaultagent-text-layer-fixture.pdf",
+          "locator": {
+            "format": "pdf",
+            "pageNumber": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "docx-table-location",
+      "question": "DOCX fixture 的基础表格应以什么位置引用？",
+      "expectedEvidence": [
+        {
+          "file": "fixtures/office/vaultagent-docx-fixture.docx",
+          "locator": {
+            "format": "docx",
+            "blockType": "table",
+            "tableIndex": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "xlsx-formula-and-range",
+      "question": "Overview 工作表中 B2*C2 的缓存值是什么？",
+      "expectedEvidence": [
+        {
+          "file": "fixtures/office/vaultagent-xlsx-fixture.xlsx",
+          "locator": {
+            "format": "xlsx",
+            "sheetName": "Overview",
+            "range": "A1:D4"
+          }
+        }
+      ],
+      "expectedAnswerFacts": ["B2*C2", "36"]
+    }
+  ]
+}
