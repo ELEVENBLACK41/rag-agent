@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SourceDocumentViewer } from "@/components/sources/source-document-viewer";
 import type { SourceCitation, SourcePreview } from "@/lib/sources/types";
 
 type SourceDrawerProps = {
@@ -66,7 +67,10 @@ export function SourceDrawer({ citation, runId, onOpenChange }: SourceDrawerProp
 
   return (
     <Sheet open={Boolean(citation && runId)} onOpenChange={handleOpenChange}>
-      <SheetContent className="w-full p-0 sm:max-w-xl" side="right">
+      <SheetContent
+        className="data-[side=right]:w-full data-[side=right]:sm:w-[88vw] data-[side=right]:sm:max-w-[1440px] p-0"
+        side="right"
+      >
         <SheetHeader className="border-b px-5 py-4 pr-12">
           <SheetTitle>{citation?.displayName ?? "来源"}</SheetTitle>
           <SheetDescription>{citation ? describeCitationLocation(citation) : ""}</SheetDescription>
@@ -75,7 +79,7 @@ export function SourceDrawer({ citation, runId, onOpenChange }: SourceDrawerProp
           <div className="space-y-4 px-5 py-4">
             {!preview && !error && <LoadingSource />}
             {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-            {preview && <SourcePreviewContent preview={preview} />}
+            {preview && runId && <SourcePreviewContent preview={preview} runId={runId} />}
           </div>
         </ScrollArea>
       </SheetContent>
@@ -94,12 +98,16 @@ async function loadPreview(runId: string, chunkId: string, signal: AbortSignal) 
   return payload;
 }
 
-/** 根据来源类型展示文本预览、原始 PDF 或受限视觉派生图片。 */
-function SourcePreviewContent({ preview }: { preview: SourcePreview }) {
+/** 根据来源类型展示完整文本、原始 Office/PDF 或受限视觉派生图片。 */
+function SourcePreviewContent({ preview, runId }: { preview: SourcePreview; runId: string }) {
+  const hasDocumentViewer =
+    preview.mediaType === "text/markdown" ||
+    preview.mediaType === "text/plain" ||
+    preview.mediaType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        <Badge variant="secondary">解析片段</Badge>
+        <Badge variant="secondary">{hasDocumentViewer ? "完整原文件" : "解析片段"}</Badge>
         <Badge variant="outline">{preview.mediaType}</Badge>
       </div>
       {preview.visualAssetUrl && (
@@ -116,10 +124,11 @@ function SourcePreviewContent({ preview }: { preview: SourcePreview }) {
           <iframe className="h-96 w-full rounded-lg border bg-muted" src={buildPdfLocation(preview.documentUrl, preview.sourceLocator)} title={`${preview.displayName} PDF 预览`} />
         </div>
       )}
-      <div className="space-y-2">
-        <p className="text-sm font-medium">{preview.documentUrl ? "当前定位的解析片段" : "可定位的解析片段"}</p>
-        <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-6 text-foreground">{preview.content}</pre>
-      </div>
+      {hasDocumentViewer && <SourceDocumentViewer preview={preview} runId={runId} />}
+      <details className="rounded-lg border p-3">
+        <summary className="cursor-pointer text-sm font-medium">当前解析片段</summary>
+        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/40 p-3 font-mono text-xs leading-6 text-foreground">{preview.content}</pre>
+      </details>
     </>
   );
 }

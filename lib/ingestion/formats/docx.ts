@@ -11,7 +11,6 @@
 
 import mammoth from "mammoth";
 import type { ParsedDocument, ParsedTextChunk } from "@/lib/ingestion/formats/types";
-import { log } from "console";
 
 /** 单个 DOCX 检索块最大字符数，与 Markdown/PDF 的上下文上限保持一致。 */
 const MAX_CHUNK_CHARACTERS = 1_400;
@@ -36,8 +35,6 @@ export async function parseDocx(bytes: Uint8Array): Promise<ParsedDocument> {
   } catch {
     throw new Error("DOCX 无法解析。请确认文件未损坏且不是受密码保护的旧版 Word 文档。");
   }
-  // console.log('1111111111111111111111',result)
-  // console.log('22222222222222222222',parseDocxHtml(result.value))
   return {
     chunks: parseDocxHtml(result.value),
     diagnostics: result.messages.map((message) => ({
@@ -80,10 +77,10 @@ function parseDocxHtml(html: string): ParsedTextChunk[] {
     blockIndex += 1;
     const blockType = tag === "vaultagent-table" ? "table" : "paragraph";
     const tableMatch = /data-table-index="(\d+)"/i.exec(match[0]);
-    const content = withHeadingContext(text, headingStack);
-    for (let offset = 0; offset < content.length; offset += MAX_CHUNK_CHARACTERS) {
+    for (let offset = 0; offset < text.length; offset += MAX_CHUNK_CHARACTERS) {
+      const sourceText = text.slice(offset, offset + MAX_CHUNK_CHARACTERS);
       chunks.push({
-        content: content.slice(offset, offset + MAX_CHUNK_CHARACTERS),
+        content: withHeadingContext(sourceText, headingStack),
         startLine: null,
         endLine: null,
         sourceLocator: {
@@ -92,6 +89,7 @@ function parseDocxHtml(html: string): ParsedTextChunk[] {
           blockType,
           blockIndex,
           ...(tableMatch ? { tableIndex: Number(tableMatch[1]) } : {}),
+          textQuote: { exact: sourceText },
         },
       });
     }

@@ -41,6 +41,8 @@ export type DocxSourceLocator = {
   blockType: "paragraph" | "table";
   blockIndex: number;
   tableIndex?: number;
+  /** 原始 Word 块中的短文本，用于浏览器预览的精确引用定位。 */
+  textQuote?: { exact: string };
 };
 
 /** DOCX 内嵌图片的模型描述，仍通过图片序号回溯到同一文件版本。 */
@@ -127,6 +129,10 @@ export function toSourceLocator(value: unknown): SourceLocator | null {
     typeof locator.blockIndex === "number" &&
     (locator.tableIndex === undefined || typeof locator.tableIndex === "number")
   ) {
+    if (
+      locator.textQuote !== undefined &&
+      (!isTextQuote(locator.textQuote) || Object.keys(locator.textQuote).some((key) => key !== "exact"))
+    ) return null;
     return locator as DocxSourceLocator;
   }
   if (
@@ -176,4 +182,11 @@ export function toSourceLocator(value: unknown): SourceLocator | null {
     return locator as SourceLocator;
   }
   return null;
+}
+
+/** 验证 DOCX 定位写入的短原文，避免客户端把未知 JSON 当作可执行定位信息。 */
+function isTextQuote(value: unknown): value is { exact: string } {
+  if (!value || typeof value !== "object") return false;
+  const quote = value as Record<string, unknown>;
+  return typeof quote.exact === "string" && quote.exact.length > 0;
 }

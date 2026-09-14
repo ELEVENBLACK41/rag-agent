@@ -11,6 +11,7 @@
 import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
 import { getRunSourceRecord } from "@/lib/sources/reader";
 import { toSourceLocator } from "@/lib/ingestion/formats/types";
+import { createDocxSourceHighlight, createTextSourceHighlight } from "@/lib/sources/source-highlight";
 
 export const runtime = "nodejs";
 
@@ -37,6 +38,10 @@ export async function GET(
       startLine: source.startLine,
       endLine: source.endLine,
       sourceLocator: locator,
+      sourceHighlight:
+        createTextSourceHighlight(source.mediaType, source.startLine, source.endLine) ??
+        createDocxSourceHighlight(locator),
+      fileUrl: `${basePath}/file`,
       documentUrl: source.mediaType === "application/pdf" ? `${basePath}/file` : null,
       visualAssetUrl: locator?.format.endsWith("-visual") ? `${basePath}/asset` : null,
     },

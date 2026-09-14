@@ -26,6 +26,7 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+  --color-source-highlight: var(--source-highlight);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -75,6 +76,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  --source-highlight: oklch(0.92 0.16 96);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -110,6 +112,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  --source-highlight: oklch(0.7 0.14 96);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -130,4 +133,14 @@
   html {
     @apply font-sans;
   }
+}
+
+/* docx-preview 输出的 Word 页仅在来源抽屉内生效，避免其全局样式影响聊天界面。 */
+.docx-source-viewer .docx-wrapper {
+  background: transparent;
+  padding: 0;
+}
+
+.docx-source-viewer .docx {
+  margin: 0 auto 1rem;
 }

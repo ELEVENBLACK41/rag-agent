@@ -98,6 +98,8 @@ export async function getRunSourceRecord(runId: string, chunkId: string) {
       sourceLocator: chunks.sourceLocator,
       fileVersionId: fileVersions.id,
       storageKey: fileVersions.storageKey,
+      sourcePath: logicalFiles.sourcePath,
+      snapshotId: runs.snapshotId,
     })
     .from(runs)
     .innerJoin(conversations, eq(runs.conversationId, conversations.id))

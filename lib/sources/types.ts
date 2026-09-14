@@ -10,6 +10,22 @@
 
 import type { SourceLocator } from "@/lib/ingestion/formats/types";
 
+/** 用于在渲染后文本中消除重复命中歧义的短文本引用。 */
+export type TextQuoteSelector = {
+  exact: string;
+  prefix?: string;
+  suffix?: string;
+  occurrence?: number;
+};
+
+/** Viewer 所需的最小定位表现契约，不改变原始 SourceLocator 的稳定语义。 */
+export type SourceHighlight =
+  | { kind: "line-range"; startLine: number; endLine: number; quote?: TextQuoteSelector }
+  | { kind: "docx-text"; blockIndex: number; quote: TextQuoteSelector }
+  | { kind: "docx-image"; imageIndex?: number; relationshipId?: string; contentHash?: string }
+  | { kind: "xlsx-range"; sheetName: string; range: string }
+  | { kind: "pdf-page"; pageNumber: number };
+
 /** 一条可在回答中引用、也可由来源抽屉打开的证据。 */
 export type SourceCitation = {
   id: number;
@@ -29,6 +45,10 @@ export type SourcePreview = {
   startLine: number | null;
   endLine: number | null;
   sourceLocator: SourceLocator | null;
+  /** 当前引用在 Viewer 中使用的展示定位信息。 */
+  sourceHighlight: SourceHighlight | null;
+  /** 所有格式共用的受鉴权原文件地址；客户端不得推导存储键。 */
+  fileUrl: string;
   /** PDF 可通过此受鉴权地址打开原文件并跳转到对应页。 */
   documentUrl: string | null;
   /** 视觉 Chunk 的派生图片通过受鉴权地址读取。 */
