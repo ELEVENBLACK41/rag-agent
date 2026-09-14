@@ -4,7 +4,10 @@
  *
  * DAY8 保留标题路径、段落、Obsidian 引用语义，并将 fenced code block 作为独立的
  * 可定位块。该实现不把代码中的 # 或空行误判为 Markdown 文档结构。
- *
+ * DAY8 重新升级了一下md文档的解析器，原来的解析器只适合简单文本，无法处理obs知识库里面md文档最重要的两类结构，标题层级和上下文，fenced code block （代码块）
+ * 又因为md解析结果会进入Chunk，Embedding，关键词检索，RRF，rerank到最终回答，所以解析错误会导致检索错  引用错  回答错
+ * 比如说就会误识别代码块中的标题 
+ * 所以本质上加入rerank后重构一下md解析器，从按照标题和空行切字符串，升级为 识别标题，段落，代码块，并保留来源定位的轻量结构解析器
  * edit by：Sliye
  */
 
@@ -18,7 +21,7 @@ const MAX_CHUNK_CHARACTERS = 1_400;
 /** 判断链接目标是否为附件。 */
 const ATTACHMENT_EXTENSION =
   /\.(?:png|jpe?g|gif|webp|pdf|docx|xlsx)(?:$|[?#])/i;
-
+/** 判断这是正文还是代码块 */
 type MarkdownBlock = {
   kind: "paragraph" | "code";
   content: string;
@@ -44,6 +47,13 @@ export function parseMarkdown(markdown: string): ParsedTextChunk[] {
   let codeLanguage: string | undefined;
 
   const appendBlock = (block: MarkdownBlock) => {
+    /**
+     * 标题路径改成完整路径
+     * 例如 # 部署文档
+            ## Docker 部署
+            ### Windows
+            Chunk会包含  标题路径：部署文档 > Docker 部署 > Windows
+     *  */ 
     const headingPath = headingStack.map((heading) => heading.text);
     const content = buildChunkContent(block, headingPath);
     const sourceLocator = createSourceLocator(
@@ -82,6 +92,7 @@ export function parseMarkdown(markdown: string): ParsedTextChunk[] {
 
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
+    /** 进入到代码块后里面的# 空行 普通文本 md符号都不会再被当成md结构去进行解析 */
     if (codeFence) {
       if (isClosingFence(line, codeFence)) {
         flushCode(lineNumber);
@@ -92,7 +103,14 @@ export function parseMarkdown(markdown: string): ParsedTextChunk[] {
       codeLines.push(line);
       return;
     }
-
+    /** 代码块会被当成独立的chunk
+     * 并保存为
+     *   kind: "code",
+     *   content: "const a = 1;",
+     *   startLine: 5,
+     *   endLine: 7,
+     *   codeLanguage: "ts"
+     */
     const openingFence = /^(`{3,}|~{3,})([^`]*)$/.exec(line);
     if (openingFence) {
       flushParagraph(lineNumber - 1);
@@ -158,7 +176,9 @@ function appendSplitChunks(
   }
 }
 
-/** 在限制内优先按换行或空白拆开，避免普通文本和代码标记被生硬截断。 */
+/** 在限制内优先按换行或空白拆开，避免普通文本和代码标记被生硬截断
+ * 长文本不再硬切 如果超过了 1400 字符的话 优先找合适的换行，找不到找空格还找不到，才硬切
+ */
 function findChunkBoundary(content: string) {
   if (content.length <= MAX_CHUNK_CHARACTERS) return content.length;
   const newlineBoundary = content.lastIndexOf("\n", MAX_CHUNK_CHARACTERS);
@@ -169,7 +189,7 @@ function findChunkBoundary(content: string) {
     : MAX_CHUNK_CHARACTERS;
 }
 
-/** fenced code block 必须以相同字符、且长度不少于开头围栏的行关闭。 */
+/** fenced code block 必须以相同字符、且长度不少于开头围栏的行关闭 */
 function isClosingFence(line: string, openingFence: string) {
   const marker = openingFence[0];
   const expression = new RegExp(`^${marker}{${openingFence.length},}\\s*$`);

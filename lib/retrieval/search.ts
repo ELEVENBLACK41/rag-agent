@@ -77,6 +77,7 @@ export async function getLatestPublishedSnapshot(workspaceId: string) {
  * @param question 用户提交的问题。
  */
 export async function retrievePublishedChunks(snapshotId: string, question: string) {
+  //关键词候选和向量候选
   const result = await retrievePublishedChunksWithTrace(snapshotId, question);
   return result.chunks;
 }
@@ -94,9 +95,12 @@ export async function retrievePublishedChunksWithTrace(
   snapshotId: string,
   question: string,
 ): Promise<RetrievalResult> {
+  //从keyword提取出来的关键词keywordTerms
   const keywordTerms = extractKeywordTerms(question);
   const [keywordCandidates, vectorResult] = await Promise.all([
+    //关键词候选
     retrieveKeywordCandidates(snapshotId, keywordTerms),
+    //向量候选
     retrieveVectorCandidates(snapshotId, question),
   ]);
   const fusedCandidates = fuseWithRrf<RetrievedChunk>(
@@ -258,10 +262,11 @@ async function rerankCandidates(
 
   const startedAt = Date.now();
   try {
+    //rerank排序
     const result = await rerank({
       model: gateway.rerankingModel(RERANK_MODEL),
-      documents: candidates.map((candidate) => candidate.content),
-      query: question,
+      documents: candidates.map((candidate) => candidate.content),//候选 Chunk 正文
+      query: question,//用户问题
       topN: FINAL_RETRIEVAL_LIMIT,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(RERANK_TIMEOUT_MS),
