@@ -18,6 +18,7 @@ import {
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 import {
   PromptInput,
   PromptInputSubmit,
@@ -204,7 +205,7 @@ export function VaultWorkspace() {
   }
 
   return (
-    <main className="flex min-h-screen bg-background text-foreground">
+    <main className="flex h-dvh overflow-hidden bg-background text-foreground">
       <aside className="hidden w-80 shrink-0 border-r border-border bg-card lg:block">
         <div className="flex h-full flex-col gap-5 p-5">
           <div className="space-y-1"><p className="text-lg font-semibold">VaultAgent</p><p className="text-sm text-muted-foreground">多格式知识问答</p></div>
@@ -215,7 +216,7 @@ export function VaultWorkspace() {
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-border px-5 py-4">
           <div><h1 className="font-semibold">我的知识库</h1><p className="text-sm text-muted-foreground">单轮真实检索、流式回答与来源定位引用</p></div>
           {conversationId && <Button disabled={isStreaming} onClick={removeConversation} size="sm" type="button" variant="ghost"><Trash2Icon className="size-4" /> 删除会话</Button>}
@@ -230,14 +231,17 @@ export function VaultWorkspace() {
                 <Message from={message.role} key={message.id}>
                   <MessageContent>
                     {message.role === "assistant" ? 
-                      (message.content ? 
+                      (message.content ?
                         <MessageResponse
-                      isAnimating={isStreaming}
-                        
+                          isAnimating={isStreaming}
                         >
                           {message.content}
-                        </MessageResponse> 
-                        : <span className="text-muted-foreground">正在生成回答…</span>
+                        </MessageResponse>
+                        : isStreaming ? (
+                          <span aria-live="polite" className="text-sm">
+                            <Shimmer as="span">{stageMessage ?? "正在生成回答…"}</Shimmer>
+                          </span>
+                        ) : null
                       ) : 
                       message.content
                     }
@@ -246,10 +250,9 @@ export function VaultWorkspace() {
                 </Message>
               ))}
             </ConversationContent>
-            <ConversationScrollButton />
+            <ConversationScrollButton aria-label="回到底部" title="回到底部" />
           </Conversation>
           <div className="border-t border-border bg-card px-5 py-4"><div className="mx-auto w-full max-w-3xl space-y-2">
-            {stageMessage && <p aria-live="polite" className="text-sm text-muted-foreground">{stageMessage}</p>}
             {toolActivities.length > 0 && <ul aria-label="知识库工具活动" className="space-y-1 text-sm text-muted-foreground">{toolActivities.map((activity) => <li key={activity.toolCallId}>{activity.status === "failed" ? "×" : activity.status === "completed" ? "✓" : "·"} {activity.message}</li>)}</ul>}
             {chatError && <p className="text-sm text-destructive" role="alert">{chatError}</p>}
             <PromptInput onSubmit={submitQuestion}><PromptInputTextarea disabled={!canChat || isStreaming} onChange={(event) => setInput(event.currentTarget.value)} placeholder={canChat ? "问问你的已导入资料…" : "完成 Markdown 索引后即可提问"} value={input} /><PromptInputSubmit disabled={!canChat || (!input.trim() && !isStreaming)} onStop={() => abortControllerRef.current?.abort()} status={isStreaming ? "streaming" : "ready"} /></PromptInput>

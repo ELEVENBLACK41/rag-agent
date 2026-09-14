@@ -32,6 +32,7 @@
     "exceljs": "4.4.0",
     "lucide-react": "1.42.0",
     "mammoth": "1.12.2",
+    "motion": "^13.3.0",
     "nanoid": "6.0.1",
     "next": "16.3.4",
     "pdfjs-dist": "6.3.289",

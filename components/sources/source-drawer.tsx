@@ -115,13 +115,13 @@ function SourcePreviewContent({ preview, runId }: { preview: SourcePreview; runI
           <p className="flex items-center gap-2 text-sm font-medium"><ImageIcon className="size-4" />视觉派生图片</p>
           {/* 私有来源需携带当前会话 Cookie，不能让 Next 图片优化器以服务端无授权请求代取。 */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img alt={`${preview.displayName} 的视觉来源`} className="max-h-96 w-full rounded-lg border object-contain" src={preview.visualAssetUrl} />
+          <img alt={`${preview.displayName} 的视觉来源`} className="mx-auto block max-h-64 max-w-full w-auto rounded-lg border object-contain" src={preview.visualAssetUrl} />
         </div>
       )}
       {preview.documentUrl && (
         <div className="space-y-2">
           <p className="flex items-center gap-2 text-sm font-medium"><FileTextIcon className="size-4" />原始 PDF</p>
-          <iframe className="h-96 w-full rounded-lg border bg-muted" src={buildPdfLocation(preview.documentUrl, preview.sourceLocator)} title={`${preview.displayName} PDF 预览`} />
+          <iframe className="h-[70vh] min-h-[520px] max-h-[760px] w-full rounded-lg border bg-muted" src={buildPdfLocation(preview.documentUrl, preview.sourceLocator)} title={`${preview.displayName} PDF 预览`} />
         </div>
       )}
       {hasDocumentViewer && <SourceDocumentViewer preview={preview} runId={runId} />}
