@@ -1,49 +1,38 @@
 /**
- * 修改时间：2026-09-12
- * 文件说明：VaultAgent 单轮检索问答 Run 与事件持久化。
+ * 修改时间：2026-09-14
+ * 文件说明：VaultAgent D9 受限多步问答 Run 与事件持久化。
  *
- * 此文件固定一次问答的资料快照、流式事件和引用信息；格式专属定位由解析层
- * 传入并在这里转换为模型与用户可理解的简短描述，不承担文件格式解析职责。
+ * 此文件固定一次问答的资料快照、流式事件和引用信息；Agent 工具由 lib/agent
+ * 装配，格式专属来源读取由 lib/sources 处理，本文件不承担工具或文件格式逻辑。
  *
- * 此文件为一次问答的执行核心编排文件，结合 lib/retrieval/search.ts 进行检索，并结合 ai-sdk-core 进行模型生成回答
- * 主要负责：
- * 创建单轮问答 Run
- * 固定本次问答使用的知识库快照
- * 调用向量检索
- * 将回答锃亮推送给浏览器
- * 持久化消息，引用，和执行事件
- * 处理失败，短线，会话删除
  * edit by：Sliye
  */
 
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
-import { gateway, streamText } from "ai";
+import { createVaultRunAgent } from "@/lib/agent/run-agent";
+import { createVaultRunState } from "@/lib/agent/run-state";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
 import {
   getLatestPublishedSnapshot,
-  retrievePublishedChunksWithTrace,
-  type RetrievedChunk,
 } from "@/lib/retrieval/search";
-import type { SourceLocator } from "@/lib/ingestion/formats/types";
-
-/** DAY1 已验证的 D3 问答模型。 */
-const CHAT_MODEL = "alibaba/qwen3.7-flash";
-/** 单次 D3 问答最多生成的 token 数，避免本阶段无界费用。 */
-const MAX_OUTPUT_TOKENS = 1_200;
+import type { SourceCitation } from "@/lib/sources/types";
 /** 文本增量写入事件库的最短时间窗口，避免逐 token 写库。 */
 const EVENT_FLUSH_INTERVAL_MS = 300;
+/** 同一 Node 执行内串行化同一 Run 的事件写入，避免并发工具占用相同 sequence。 */
+const pendingEventWrites = new Map<string, Promise<void>>();
 
-// 给前端展示的引用信息
-export type ChatCitation = {
-  id: number;
-  chunkId: string;
-  displayName: string;
-  startLine: number | null;
-  endLine: number | null;
-  sourceLocator: SourceLocator | null;
+/** 给前端展示的引用信息，引用必须来自 Agent 已读取的证据。 */
+export type ChatCitation = SourceCitation;
+
+/** 公开的工具活动摘要，不包含模型思维、工具参数或来源正文。 */
+export type ChatToolActivity = {
+  toolCallId: string;
+  toolName: string;
+  status: "started" | "completed" | "failed";
+  message: string;
 };
 
 // 一次问答执行的身份信息
@@ -55,6 +44,7 @@ export type ChatRun = {
 // 推送给浏览器的事件类型
 export type ChatStreamEvent =
   | { type: "stage"; data: { message: string } } //阶段消息 例如 ：正在检索已发布的知识库快照
+  | { type: "tool"; data: ChatToolActivity }
   | { type: "delta"; data: { text: string } } //文本增量
   | { type: "complete"; data: { citations: ChatCitation[] } }; //完成事件，包含引用信息
 
@@ -131,7 +121,7 @@ export async function createChatRun(question: string, conversationId?: string): 
 }
 
 /**
- * 执行一次固定检索与一次模型生成，并持续产出可发布给浏览器的事件。
+ * 执行一次固定快照下的受限多步问答，并持续产出可发布给浏览器的事件。
  *
  * @param chatRun 已持久化的单轮问答 Run。
  * @param question 已保存的用户问题。
@@ -147,44 +137,53 @@ export async function* executeChatRun(
   question: string,
 ): AsyncGenerator<ChatStreamEvent> {
   try {
-    yield await createStageEvent(chatRun.runId, "正在检索已发布的知识库快照。");
-    //开始调用search了，给快照id和用户的prompt 去搜索
-    const retrieval = await retrievePublishedChunksWithTrace(
-      chatRun.snapshotId,
-      question,
-    );
-    await appendRunEvent(chatRun.runId, "retrieval_trace", retrieval.trace);
-    const sources = retrieval.chunks;
-    
-    if (!sources.length) throw new Error("当前资料中没有可用于回答的已索引文本块。");
-    //整理一下返回得字段，把相似的啥的先剔除
-    const citations = toCitations(sources);
-    //再通知浏览器，已经找到多少个候选片段，即将生成回答
-    yield await createStageEvent(chatRun.runId, `已找到 ${sources.length} 个候选片段，正在生成回答。`);
-    //ai sdk得api 调用模型去流式生成
-    const result = streamText({
-      model: gateway(CHAT_MODEL),
-      system: buildSystemInstruction(sources), //构造模型得上下文
-      prompt: question,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
-      reasoning: "none", // 这里是推理输出 先暂时关闭
+    yield await createStageEvent(chatRun.runId, "正在规划知识库检索步骤。");
+    const state = createVaultRunState(chatRun.snapshotId, {
+      onRetrievalTrace: (trace) => appendRunEvent(chatRun.runId, "retrieval_trace", trace),
     });
+    const agent = createVaultRunAgent(state);
+    const result = await agent.stream({ prompt: question });
 
     let answer = "";
     let pendingEventText = "";
     let lastEventFlushAt = Date.now();
-    //循环读取模型生成得文本
-    for await (const textDelta of result.textStream) {
-      answer += textDelta;
-      //累计写入库得文本
-      pendingEventText += textDelta;
-      yield { type: "delta", data: { text: textDelta } };
-      //每隔300ms就把增量写入数据库，避免每个token都写入数据库
-      if (Date.now() - lastEventFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
-        await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
-        pendingEventText = "";
-        lastEventFlushAt = Date.now();
+    //fullStream 同时提供文本、工具调用与工具结果；不读取 reasoning 事件，避免泄露私密思维。
+    for await (const part of result.fullStream) {
+      if (part.type === "text-delta") {
+        answer += part.text;
+        pendingEventText += part.text;
+        yield { type: "delta", data: { text: part.text } };
+        if (Date.now() - lastEventFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
+          await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
+          pendingEventText = "";
+          lastEventFlushAt = Date.now();
+        }
       }
+      if (part.type === "tool-call") {
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "started",
+          message: describeToolActivity(part.toolName, "started"),
+        });
+      }
+      if (part.type === "tool-result") {
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "completed",
+          message: describeToolActivity(part.toolName, "completed"),
+        });
+      }
+      if (part.type === "tool-error") {
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "failed",
+          message: describeToolActivity(part.toolName, "failed"),
+        });
+      }
+      if (part.type === "error") throw part.error;
     }
     //模型结束后补齐文本
     if (pendingEventText) {
@@ -192,6 +191,7 @@ export async function* executeChatRun(
     }
     if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
     //完成一次run
+    const citations = state.getCitations();
     await completeChatRun(chatRun, answer, citations);
     yield { type: "complete", data: { citations } };
   } catch (error) {
@@ -252,60 +252,27 @@ async function createStageEvent(runId: string, message: string): Promise<ChatStr
   return { type: "stage", data: { message } };
 }
 
-/** 将检索片段转换为稳定的、可呈现的引用信息。 */
-function toCitations(sources: RetrievedChunk[]): ChatCitation[] {
-  return sources.map((source, index) => ({
-    id: index + 1,
-    chunkId: source.chunkId,
-    displayName: source.displayName,
-    startLine: source.startLine,
-    endLine: source.endLine,
-    sourceLocator: source.sourceLocator,
-  }));
-}
-
-/** 构造只允许引用提供资料的模型说明与文本上下文。 */
-function buildSystemInstruction(sources: RetrievedChunk[]) {
-  const sourceText = sources
-    .map(
-      (source, index) =>
-        `【${index + 1}】${source.displayName}（${describeSourceLocation(source)}）\n${source.content}`,
-    )
-    .join("\n\n");
-
-  return [
-    "你是 VaultAgent。只根据以下知识库片段回答，资料不足时明确说明。",
-    "不要编造资料中不存在的内容，也不要输出私密思维过程。",
-    "引用关键结论时使用【编号】；编号必须来自提供的资料片段。",
-    "资料片段：",
-    sourceText,
-  ].join("\n\n");
-}
-
-/** 将不同格式的定位信息转换为模型与用户均可理解的引用描述。 */
-function describeSourceLocation(source: RetrievedChunk) {
-  if (source.sourceLocator?.format === "pdf")
-    return `第 ${source.sourceLocator.pageNumber} 页`;
-  if (source.sourceLocator?.format === "pdf-visual")
-    return `第 ${source.sourceLocator.pageNumber} 页 · 视觉分析`;
-  if (source.sourceLocator?.format === "docx") {
-    if (source.sourceLocator.blockType === "table")
-      return `表格 ${source.sourceLocator.tableIndex ?? source.sourceLocator.blockIndex}`;
-    return `段落 ${source.sourceLocator.blockIndex}`;
-  }
-  if (source.sourceLocator?.format === "docx-visual")
-    return `内嵌图片 ${source.sourceLocator.imageIndex} · 视觉分析`;
-  if (source.sourceLocator?.format === "xlsx")
-    return `工作表 ${source.sourceLocator.sheetName} · ${source.sourceLocator.range}`;
-  if (source.sourceLocator?.format === "xlsx-visual")
-    return `工作表 ${source.sourceLocator.sheetName} · ${source.sourceLocator.anchor} · 内嵌图片 ${source.sourceLocator.imageIndex} · 视觉分析`;
-  if (source.startLine !== null && source.endLine !== null)
-    return `第 ${source.startLine}-${source.endLine} 行`;
-  return "位置不可用";
-}
-
-/** 按单 Run 的单调序号写入事件。D3 每个 Run 只有一个执行器，不产生并发写入 未来会扩展 */
+/**
+ * 按单 Run 的单调序号写入事件。
+ *
+ * D9 的模型可能在一个步骤中请求多个只读工具，因而必须在当前执行器中串行化
+ * sequence 分配。D10 的跨进程恢复会补充持久执行租约和数据库级并发处理。
+ */
 async function appendRunEvent(runId: string, eventType: string, payload: object) {
+  const previousWrite = pendingEventWrites.get(runId) ?? Promise.resolve();
+  const write = previousWrite
+    .catch(() => undefined)
+    .then(() => writeRunEvent(runId, eventType, payload));
+  pendingEventWrites.set(runId, write);
+  try {
+    await write;
+  } finally {
+    if (pendingEventWrites.get(runId) === write) pendingEventWrites.delete(runId);
+  }
+}
+
+/** 在已串行化的上下文中查询并分配下一个事件序号。 */
+async function writeRunEvent(runId: string, eventType: string, payload: object) {
   const db = getDatabase();
   const [lastEvent] = await db
     .select({ sequence: runEvents.sequence })
@@ -321,6 +288,29 @@ async function appendRunEvent(runId: string, eventType: string, payload: object)
     eventType,
     payload,
   });
+}
+
+/** 创建、持久化并发布一条脱敏工具活动。 */
+async function createToolEvent(runId: string, activity: ChatToolActivity): Promise<ChatStreamEvent> {
+  await appendRunEvent(
+    runId,
+    activity.status === "started" ? "tool_started" : "tool_finished",
+    activity,
+  );
+  return { type: "tool", data: activity };
+}
+
+/** 将工具名映射为公开短说明，避免透出模型参数、原始正文或内部错误。 */
+function describeToolActivity(toolName: string, status: ChatToolActivity["status"]) {
+  const labels: Record<string, string> = {
+    search_notes: "搜索知识库",
+    read_sources: "读取来源片段",
+    find_related: "查找关联资料",
+  };
+  const label = labels[toolName] ?? "执行受限工具";
+  if (status === "started") return `${label}…`;
+  if (status === "completed") return `${label}完成`;
+  return `${label}未完成`;
 }
 
 /** 同一事务提交最终回答、Run 终态与完成事件，避免刷新后出现双重完成。 */

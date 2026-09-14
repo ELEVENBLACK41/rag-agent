@@ -1,9 +1,9 @@
 /**
- * 修改时间：2026-09-12
- * 文件说明：VaultAgent 知识库聊天工作台。
+ * 修改时间：2026-09-14
+ * 文件说明：VaultAgent D9 知识库聊天工作台。
  *
- * 页面组合导入面板、聊天流和引用标签；定位展示使用服务端传来的来源类型，
- * 使 PDF 页码、DOCX 段落/表格和视觉图片都能保持可复现而不混用行号。
+ * 页面组合导入面板、Agent 公开工具活动、聊天流和可点击引用；来源正文由右侧
+ * 抽屉通过 Run 范围的受鉴权 API 读取，避免前端直接接触存储信息。
  *
  * edit by：Sliye
  */
@@ -24,36 +24,28 @@ import {
   PromptInputTextarea,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ImportPanel } from "@/components/chat/import-panel";
 import { useImportBatch } from "@/components/chat/use-import-batch";
+import { SourceDrawer } from "@/components/sources/source-drawer";
 import { FileTextIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import type { SourceCitation } from "@/lib/sources/types";
 
-type Citation = {
-  id: number;
-  displayName: string;
-  startLine: number | null;
-  endLine: number | null;
-  sourceLocator: {
-    format: string;
-    pageNumber?: number;
-    blockType?: "paragraph" | "table";
-    blockIndex?: number;
-    tableIndex?: number;
-    imageIndex?: number;
-    sheetName?: string;
-    range?: string;
-    anchor?: string;
-  } | null;
-};
+type Citation = SourceCitation;
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  runId?: string;
   citations?: Citation[];
+};
+
+type ToolActivity = {
+  toolCallId: string;
+  status: "started" | "completed" | "failed";
+  message: string;
 };
 
 /** D4 本地工作台：导入受限 Vault、等待索引、进行单轮问答并展示引用。 */
@@ -65,6 +57,9 @@ export function VaultWorkspace() {
   const [stageMessage, setStageMessage] = useState<string | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [toolActivities, setToolActivities] = useState<ToolActivity[]>([]);
+  const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
+  const [selectedSourceRunId, setSelectedSourceRunId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   /** 发起单轮问答并把 SSE 文本增量写入临时助手消息。 */
   async function submitQuestion(message: PromptInputMessage) {
@@ -82,6 +77,7 @@ export function VaultWorkspace() {
     setInput("");
     setChatError(null);
     setStageMessage("正在创建知识问答任务。");
+    setToolActivities([]);
     setIsStreaming(true);
 
     let activeRunId: string | null = null;
@@ -103,8 +99,10 @@ export function VaultWorkspace() {
           const run = data as { runId?: string; conversationId?: string };
           activeRunId = run.runId ?? null;
           if (run.conversationId) setConversationId(run.conversationId);
+          if (run.runId) updateAssistantRunId(assistantMessageId, run.runId);
         }
         if (event === "stage") setStageMessage((data as { message: string }).message);
+        if (event === "tool") updateToolActivity(data as ToolActivity);
         if (event === "delta") appendAssistantText(assistantMessageId, (data as { text: string }).text);
         if (event === "complete") {
           updateAssistantCitations(assistantMessageId, (data as { citations: Citation[] }).citations);
@@ -164,6 +162,9 @@ export function VaultWorkspace() {
     setMessages([]);
     setChatError(null);
     setStageMessage(null);
+    setToolActivities([]);
+    setSelectedCitation(null);
+    setSelectedSourceRunId(null);
   }
 
   /** 将服务端文本增量追加到对应的助手消息。 */
@@ -179,6 +180,27 @@ export function VaultWorkspace() {
   /** 更新助手消息的真实文档行号引用。 */
   function updateAssistantCitations(messageId: string, citations: Citation[]) {
     setMessages((current) => current.map((item) => (item.id === messageId ? { ...item, citations } : item)));
+  }
+
+  /** 将服务端新建的 Run 绑定到临时助手消息，引用抽屉只能使用这一真实 Run。 */
+  function updateAssistantRunId(messageId: string, runId: string) {
+    setMessages((current) => current.map((item) => (item.id === messageId ? { ...item, runId } : item)));
+  }
+
+  /** 同一个工具调用更新一行公开状态，不渲染模型参数、工具输出或私密思维。 */
+  function updateToolActivity(activity: ToolActivity) {
+    setToolActivities((current) => {
+      const previous = current.findIndex((item) => item.toolCallId === activity.toolCallId);
+      if (previous < 0) return [...current, activity];
+      return current.map((item, index) => (index === previous ? activity : item));
+    });
+  }
+
+  /** 打开引用时固定其所属 Run，防止新一轮问答覆盖来源上下文。 */
+  function openCitation(message: ChatMessage, citation: Citation) {
+    if (!message.runId) return;
+    setSelectedCitation(citation);
+    setSelectedSourceRunId(message.runId);
   }
 
   return (
@@ -220,7 +242,7 @@ export function VaultWorkspace() {
                       message.content
                     }
                   </MessageContent>
-                  {message.role === "assistant" && message.citations && message.citations.length > 0 && <div className="flex flex-wrap gap-2">{message.citations.map((citation) => <Badge className="gap-1" key={citation.id} variant="secondary"><FileTextIcon className="size-3" />【{citation.id}】{citation.displayName} · {getCitationLocation(citation)}</Badge>)}</div>}
+                  {message.role === "assistant" && message.citations && message.citations.length > 0 && <div className="flex flex-wrap gap-2">{message.citations.map((citation) => <Button className="h-6 gap-1 px-2 text-xs" disabled={!message.runId} key={citation.id} onClick={() => openCitation(message, citation)} size="sm" type="button" variant="outline"><FileTextIcon className="size-3" />【{citation.id}】{citation.displayName} · {getCitationLocation(citation)}</Button>)}</div>}
                 </Message>
               ))}
             </ConversationContent>
@@ -228,11 +250,22 @@ export function VaultWorkspace() {
           </Conversation>
           <div className="border-t border-border bg-card px-5 py-4"><div className="mx-auto w-full max-w-3xl space-y-2">
             {stageMessage && <p aria-live="polite" className="text-sm text-muted-foreground">{stageMessage}</p>}
+            {toolActivities.length > 0 && <ul aria-label="知识库工具活动" className="space-y-1 text-sm text-muted-foreground">{toolActivities.map((activity) => <li key={activity.toolCallId}>{activity.status === "failed" ? "×" : activity.status === "completed" ? "✓" : "·"} {activity.message}</li>)}</ul>}
             {chatError && <p className="text-sm text-destructive" role="alert">{chatError}</p>}
             <PromptInput onSubmit={submitQuestion}><PromptInputTextarea disabled={!canChat || isStreaming} onChange={(event) => setInput(event.currentTarget.value)} placeholder={canChat ? "问问你的已导入资料…" : "完成 Markdown 索引后即可提问"} value={input} /><PromptInputSubmit disabled={!canChat || (!input.trim() && !isStreaming)} onStop={() => abortControllerRef.current?.abort()} status={isStreaming ? "streaming" : "ready"} /></PromptInput>
           </div></div>
         </div>
       </section>
+      <SourceDrawer
+        citation={selectedCitation}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedCitation(null);
+            setSelectedSourceRunId(null);
+          }
+        }}
+        runId={selectedSourceRunId}
+      />
     </main>
   );
 }

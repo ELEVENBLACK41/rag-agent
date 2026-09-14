@@ -1,16 +1,16 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 单轮检索问答 SSE API | edit by：Sliye
+ * 修改时间：2026-09-14 | 文件说明：VaultAgent D9 受限多步问答 SSE API | edit by：Sliye
  */
 
 import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
 import { createChatRun, executeChatRun } from "@/lib/chat/runs";
 
 export const runtime = "nodejs";
-/** D3 单次 SSE 连接上限，避免流式模型请求无界占用。 */
-export const maxDuration = 60;
+/** D9 多步工具链的 SSE 连接上限，仍低于 Hobby 函数的单次执行限制。 */
+export const maxDuration = 120;
 
 /**
- * 创建一次单轮检索问答并以 Server-Sent Events 返回真实进度与文本增量。
+ * 创建一次受限多步知识问答并以 Server-Sent Events 返回真实进度与文本增量。
  * 官方文档：https://nextjs.org/docs/app/building-your-application/routing/route-handlers
  *
  * @param request 包含问题和可选会话标识的 JSON 请求。
