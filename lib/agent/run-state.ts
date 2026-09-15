@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 单次多步问答的工具与证据预算状态。
  *
  * State 只在当前服务器执行内存活，固定绑定一个索引快照。它不保存模型思维过程，
@@ -13,8 +13,10 @@ import type { SourceCitation } from "@/lib/sources/types";
 
 /** 单次 D9 问答最多调用的只读工具次数，限制模型循环和费用。 */
 export const MAX_AGENT_TOOL_CALLS = 5;
+/** 搜索和关联检索共享上限，为读取证据保留调用空间。 */
+export const MAX_AGENT_SEARCH_CALLS = 5;
 /** 一次读取最多带回给模型的 Chunk 数。 */
-export const MAX_READ_CHUNKS_PER_CALL = 3;
+export const MAX_READ_CHUNKS_PER_CALL = 5;
 /** 单个 Chunk 交给模型的最大字符数，避免上下文被文件正文占满。 */
 export const MAX_SOURCE_CHARACTERS = 2_400;
 
@@ -23,18 +25,37 @@ export type VaultRunStateOptions = {
 };
 
 /** 创建一个只属于当前 Run 的受限工具执行状态。 */
-export function createVaultRunState(snapshotId: string, options: VaultRunStateOptions) {
+export function createVaultRunState(snapshotId: string | null, options: VaultRunStateOptions) {
   const permittedChunkIds = new Set<string>();
   const citations = new Map<string, SourceCitation>();
   let toolCallCount = 0;
+  /** 规范化搜索问题或关联来源，阻止相同操作重复访问检索服务。 */
+  const searches = new Set<string>();
 
   return {
     snapshotId,
-    /** 记录一次工具开始；超出预算必须显式失败而非静默继续。 */
+    /** 同步占用预算，阻止同一步并行工具突破上限；受控退出不冒充服务异常。 */
     beginToolCall() {
       if (toolCallCount >= MAX_AGENT_TOOL_CALLS)
-        throw new Error("本次问答已达到工具调用上限。");
+        return false;
       toolCallCount += 1;
+      return true;
+    },
+    /** @param key 搜索问题或带 related: 前缀的关联来源 ID。 */
+    beginSearch(key: string) {
+      const normalized = key.trim().replace(/\s+/g, " ").toLowerCase();
+      if (searches.has(normalized)) return "duplicate-search" as const;
+      if (searches.size >= MAX_AGENT_SEARCH_CALLS) return "search-budget-exhausted" as const;
+      searches.add(normalized);
+      return null;
+    },
+    /** 在模型步骤之间退出工具循环。 */
+    isToolBudgetExhausted() {
+      return toolCallCount >= MAX_AGENT_TOOL_CALLS;
+    },
+    /** 步骤门禁隐藏预算已用尽的搜索工具。 */
+    canSearch() {
+      return searches.size < MAX_AGENT_SEARCH_CALLS;
     },
     /** 搜索工具返回的 Chunk 才能进入后续读取或关联工具。 */
     permitChunks(chunkIds: string[]) {

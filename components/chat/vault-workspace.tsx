@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent D9 知识库聊天工作台。
  *
  * 页面组合导入面板、Agent 公开工具活动、聊天流和可点击引用；来源正文由右侧
@@ -35,6 +35,7 @@ import {
 import { SourceDrawer } from "@/components/sources/source-drawer";
 import { BookOpenIcon, FileTextIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import type { SourceCitation } from "@/lib/sources/types";
+import { getVisibleAnswer } from "@/lib/chat/citations";
 
 type Citation = SourceCitation;
 
@@ -62,11 +63,11 @@ type StageUpdate = {
 };
 
 type VaultWorkspaceProps = {
-  canChat: boolean;
+  hasPublishedSnapshot: boolean;
 };
 
 /** 本地聊天工作台：使用当前已发布知识库快照进行问答并展示引用。 */
-export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
+export function VaultWorkspace({ hasPublishedSnapshot }: VaultWorkspaceProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -82,7 +83,7 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
   /** 发起单轮问答并把 SSE 文本增量写入临时助手消息。 */
   async function submitQuestion(message: PromptInputMessage) {
     const question = message.text.trim();
-    if (!question || !canChat || isStreaming) return;
+    if (!question || isStreaming) return;
 
     const assistantMessageId = crypto.randomUUID();
     const controller = new AbortController();
@@ -256,9 +257,9 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
   }
 
   /**
-   * 首次工具调用后将临时正文归入执行过程；重复回放时按标识替换，避免重复阶段。
+   * 首次工具调用后清空临时正文；新事件的 stages 为空，旧事件仍按标识恢复历史阶段。
    * @param messageId 当前助手消息标识。
-   * @param stages 服务端确认属于工具前说明的文本。
+   * @param stages 旧版本的工具前说明；空数组只清空正文并保持运行状态。
    */
   function moveAnswerToStages(messageId: string, stages: StageUpdate[]) {
     setMessages((current) => current.map((item) => {
@@ -472,9 +473,9 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
               {messages.length === 0 ? (
                 <ConversationEmptyState
                   description={
-                    canChat
-                      ? "输入问题，VaultAgent 会检索已导入资料并给出可回溯引用。"
-                      : "请先导入并完成一批可索引文件的导入。"
+                    hasPublishedSnapshot
+                      ? "可以直接交流；涉及你的资料时，VaultAgent 会检索并提供回答来源。"
+                      : "可以先打个招呼或了解功能；询问知识库内容前请先导入资料。"
                   }
                   icon={<MessageSquareIcon className="size-10" />}
                   title="开始你的知识库对话"
@@ -502,7 +503,7 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
                               isStreaming && message.id === messages.at(-1)?.id
                             }
                           >
-                            {message.content}
+                            {getVisibleAnswer(message.content, isStreaming && message.id === messages.at(-1)?.id, message.citations)}
                           </MessageResponse>
                         ) : (
                           message.content
@@ -512,7 +513,8 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
                     {message.role === "assistant" &&
                       message.citations &&
                       message.citations.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-2" aria-label="回答来源">
+                          <p className="w-full text-xs text-muted-foreground">回答来源</p>
                           {message.citations.map((citation) => (
                             <Button
                               className="h-6 gap-1 px-2 text-xs"
@@ -523,8 +525,7 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
                               type="button"
                               variant="outline"
                             >
-                              <FileTextIcon className="size-3" />【{citation.id}
-                              】{citation.displayName} ·{" "}
+                              <FileTextIcon className="size-3" />{citation.displayName} ·{" "}
                               {getCitationLocation(citation)}
                             </Button>
                           ))}
@@ -545,17 +546,17 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
               )}
               <PromptInput onSubmit={submitQuestion}>
                 <PromptInputTextarea
-                  disabled={!canChat || isStreaming}
+                  disabled={isStreaming}
                   onChange={(event) => setInput(event.currentTarget.value)}
                   placeholder={
-                    canChat
+                    hasPublishedSnapshot
                       ? "问问你的已导入资料…"
-                      : "完成 Markdown 索引后即可提问"
+                      : "打个招呼，或了解如何使用知识库…"
                   }
                   value={input}
                 />
                 <PromptInputSubmit
-                  disabled={!canChat || (!input.trim() && !isStreaming)}
+                  disabled={!input.trim() && !isStreaming}
                   onStop={() => abortControllerRef.current?.abort()}
                   status={isStreaming ? "streaming" : "ready"}
                 />

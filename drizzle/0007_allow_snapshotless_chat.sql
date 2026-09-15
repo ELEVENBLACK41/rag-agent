@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ALTER COLUMN "snapshot_id" DROP NOT NULL;

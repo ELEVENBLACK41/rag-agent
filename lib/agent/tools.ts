@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent D9 只读知识库 Agent 工具定义。
  *
  * 工具只访问当前 Run 固定快照，且读取前必须来自本次搜索候选。不会提供文件写入、
@@ -21,7 +21,7 @@ import {
   type VaultRunState,
 } from "@/lib/agent/run-state";
 
-/** 创建绑定当前 Run 状态的三项只读工具。 */
+/** 创建绑定当前 Run 状态的只读工具及证据收集结束工具。 */
 export function createVaultTools(state: VaultRunState) {
   return {
     search_notes: tool({
@@ -33,11 +33,15 @@ export function createVaultTools(state: VaultRunState) {
       }),
       strict: true,
       execute: async ({ query }) => {
-        state.beginToolCall();
+        if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
+        if (!state.snapshotId) return { status: "empty-vault", message: "请先导入资料。", matches: [] };
+        const blocked = state.beginSearch(query);
+        if (blocked) return { status: blocked, message: "请使用已有候选或说明证据缺口。", matches: [] };
         const result = await retrievePublishedChunksWithTrace(state.snapshotId, query);
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
         return {
+          status: "searched",
           matches: result.chunks.map((chunk) => ({
             chunkId: chunk.chunkId,
             title: chunk.displayName,
@@ -56,7 +60,8 @@ export function createVaultTools(state: VaultRunState) {
       }),
       strict: true,
       execute: async ({ chunkIds }) => {
-        state.beginToolCall();
+        if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
+        if (!state.snapshotId) return { status: "empty-vault", message: "请先导入资料。" };
         state.assertReadable(chunkIds);
         const sources = await readSnapshotSources(state.snapshotId, chunkIds);
         if (sources.length !== chunkIds.length)
@@ -83,8 +88,11 @@ export function createVaultTools(state: VaultRunState) {
       }),
       strict: true,
       execute: async ({ chunkId }) => {
-        state.beginToolCall();
+        if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
+        if (!state.snapshotId) return { status: "empty-vault", message: "请先导入资料。", matches: [] };
         state.assertReadable([chunkId]);
+        const blocked = state.beginSearch(`related:${chunkId}`);
+        if (blocked) return { status: blocked, message: "请使用已有候选或说明证据缺口。", matches: [] };
         const [source] = await readSnapshotSources(state.snapshotId, [chunkId]);
         if (!source) throw new Error("关联来源已不可读取，请重新搜索。");
         const result = await retrievePublishedChunksWithTrace(
@@ -94,6 +102,7 @@ export function createVaultTools(state: VaultRunState) {
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
         return {
+          status: "searched",
           matches: result.chunks
             .filter((chunk) => chunk.chunkId !== chunkId)
             .map((chunk) => ({
@@ -105,16 +114,16 @@ export function createVaultTools(state: VaultRunState) {
       },
     }),
     finish_research: tool({
-      description: "证据已经足够或本地资料确实不足时结束检索阶段，随后由独立生成器输出最终回答。",
+      description: "本次证据收集可以结束时调用，随后由独立生成器评估证据并回答。读取过资料并不代表资料足以回答问题；普通交流不要调用。",
       inputSchema: z.object({
         briefing: z.string().trim().min(1).max(200)
           .describe("展示给用户的公开阶段结论：已确认了什么、仍缺少什么，1 至 2 句，不直接写完整答案"),
       }),
       strict: true,
       execute: async () => {
-        state.beginToolCall();
+        if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         return {
-          status: state.getCitationCount() ? "evidence-ready" : "insufficient-evidence",
+          status: state.getCitationCount() ? "sources-read" : "no-sources-read",
           citationCount: state.getCitationCount(),
         };
       },
