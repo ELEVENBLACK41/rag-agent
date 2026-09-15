@@ -10,7 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
-import { gateway, streamText } from "ai";
+import { gateway, parsePartialJson, streamText } from "ai";
 import { createVaultRunAgent } from "@/lib/agent/run-agent";
 import { createVaultRunState } from "@/lib/agent/run-state";
 import { getDatabase } from "@/lib/db/client";
@@ -39,6 +39,13 @@ export type ChatToolActivity = {
   message: string;
 };
 
+/** 公开阶段文本的流式更新；stageId 用于前端把同一段增量合并为一行。 */
+export type ChatStageUpdate = {
+  stageId: string;
+  delta: string;
+  status: "active" | "complete";
+};
+
 // 一次问答执行的身份信息
 export type ChatRun = {
   conversationId: string;
@@ -47,7 +54,7 @@ export type ChatRun = {
 };
 // 推送给浏览器的事件类型
 export type ChatStreamEvent =
-  | { type: "stage"; data: { message: string } }
+  | { type: "stage"; data: ChatStageUpdate }
   | { type: "tool"; data: ChatToolActivity }
   | { type: "delta"; data: { text: string } } //文本增量
   | { type: "complete"; data: { citations: ChatCitation[] } }; //完成事件，包含引用信息
@@ -150,47 +157,92 @@ export async function* executeChatRun(
     });
     const agent = createVaultRunAgent(state);
     const agentResult = await agent.stream({ prompt: question });
-    let evidenceSummary = "";
+    const toolInputStreams = new Map<
+      string,
+      { json: string; briefing: string }
+    >();
+    const textStreams = new Map<string, string>();
 
-    // fullStream 提供真实工具边界；只发布显式 briefing 和公开证据小结，不读取 reasoning。
+    // fullStream 同时提供模型文本和工具参数增量；只发布公开文本，不读取 reasoning。
     for await (const part of agentResult.fullStream) {
+      if (part.type === "text-start") {
+        textStreams.set(part.id, "");
+      }
       if (part.type === "text-delta") {
-        evidenceSummary += part.text;
+        const stageId = `text:${part.id}`;
+        const current = textStreams.get(part.id) ?? "";
+        const delta = part.text.slice(0, Math.max(0, 800 - current.length));
+        if (delta) {
+          textStreams.set(part.id, current + delta);
+          yield createStageUpdate(stageId, delta, "active");
+        }
+      }
+      if (part.type === "text-end") {
+        const message = textStreams.get(part.id)?.trim() ?? "";
+        textStreams.delete(part.id);
+        if (message) {
+          yield await completeStage(chatRun.runId, `text:${part.id}`, message);
+        }
+      }
+      if (part.type === "tool-input-start") {
+        toolInputStreams.set(part.id, { json: "", briefing: "" });
+      }
+      if (part.type === "tool-input-delta") {
+        const inputStream = toolInputStreams.get(part.id) ?? {
+          json: "",
+          briefing: "",
+        };
+        inputStream.json += part.delta;
+        const briefing = await getPartialBriefing(inputStream.json);
+        if (briefing.startsWith(inputStream.briefing)) {
+          const delta = briefing.slice(inputStream.briefing.length);
+          if (delta) {
+            inputStream.briefing = briefing;
+            yield createStageUpdate(`briefing:${part.id}`, delta, "active");
+          }
+        }
+        toolInputStreams.set(part.id, inputStream);
       }
       if (part.type === "tool-call") {
         const briefing = getPublicBriefing(part.input);
-        if (briefing) yield await createStageEvent(chatRun.runId, briefing);
-          yield await createToolEvent(chatRun.runId, {
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            status: "started",
-            message: describeToolActivity(part.toolName, "started"),
-          });
+        if (briefing) {
+          const inputStream = toolInputStreams.get(part.toolCallId);
+          const streamedBriefing = inputStream?.briefing ?? "";
+          const remaining = briefing.startsWith(streamedBriefing)
+            ? briefing.slice(streamedBriefing.length)
+            : briefing;
+          yield await completeStage(
+            chatRun.runId,
+            `briefing:${part.toolCallId}`,
+            briefing,
+            remaining,
+          );
         }
+        toolInputStreams.delete(part.toolCallId);
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "started",
+          message: describeToolActivity(part.toolName, "started"),
+        });
+      }
       if (part.type === "tool-result") {
-          yield await createToolEvent(chatRun.runId, {
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            status: "completed",
-            message: describeToolActivity(part.toolName, "completed"),
-          });
-        }
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "completed",
+          message: describeToolActivity(part.toolName, "completed"),
+        });
+      }
       if (part.type === "tool-error") {
-          yield await createToolEvent(chatRun.runId, {
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            status: "failed",
-            message: describeToolActivity(part.toolName, "failed"),
-          });
-        }
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "failed",
+          message: describeToolActivity(part.toolName, "failed"),
+        });
+      }
       if (part.type === "error") throw part.error;
-    }
-
-    if (evidenceSummary.trim()) {
-      yield await createStageEvent(
-        chatRun.runId,
-        evidenceSummary.trim().slice(0, 800),
-      );
     }
 
     const citations = state.getCitations();
@@ -285,10 +337,30 @@ function makeConversationTitle(question: string) {
   return question.replace(/\s+/g, " ").trim().slice(0, 60);
 }
 
-/** 创建并持久化公开可见的阶段说明，不记录模型私密推理。 */
-async function createStageEvent(runId: string, message: string): Promise<ChatStreamEvent> {
-  await appendRunEvent(runId, "stage_message", { message });
-  return { type: "stage", data: { message } };
+/** 创建公开阶段增量；增量只发往当前 SSE，完整文本在阶段结束时统一持久化。 */
+function createStageUpdate(
+  stageId: string,
+  delta: string,
+  status: ChatStageUpdate["status"],
+): ChatStreamEvent {
+  return { type: "stage", data: { stageId, delta, status } };
+}
+
+/** 持久化完整公开阶段，并发布可能尚未发出的尾部文本和完成状态。 */
+async function completeStage(
+  runId: string,
+  stageId: string,
+  message: string,
+  delta = "",
+): Promise<ChatStreamEvent> {
+  await appendRunEvent(runId, "stage_message", { stageId, message });
+  return createStageUpdate(stageId, delta, "complete");
+}
+
+/** 从尚未闭合的工具 JSON 中读取已生成的 briefing 文本。 */
+async function getPartialBriefing(json: string) {
+  const { value } = await parsePartialJson(json);
+  return getPublicBriefing(value, false) ?? "";
 }
 
 /** 构造只允许依据 Agent 已读取证据作答的最终生成说明。 */
@@ -367,12 +439,12 @@ async function createToolEvent(
 }
 
 /** 只读取工具 Schema 显式要求的公开 briefing，不透出其他模型参数。 */
-function getPublicBriefing(input: unknown) {
+function getPublicBriefing(input: unknown, trim = true) {
   if (!input || typeof input !== "object") return null;
   const briefing = (input as { briefing?: unknown }).briefing;
-  return typeof briefing === "string" && briefing.trim()
-    ? briefing.trim().slice(0, 200)
-    : null;
+  if (typeof briefing !== "string" || !briefing.trim()) return null;
+  const limited = briefing.slice(0, 200);
+  return trim ? limited.trim() : limited;
 }
 
 /** 将工具名映射为公开短说明，避免透出参数、正文或内部错误。 */

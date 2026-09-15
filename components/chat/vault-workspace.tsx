@@ -54,6 +54,13 @@ type ToolActivity = {
   message: string;
 };
 
+type StageUpdate = {
+  stageId: string;
+  delta: string;
+  status: "active" | "complete";
+  replace?: boolean;
+};
+
 type VaultWorkspaceProps = {
   canChat: boolean;
 };
@@ -116,10 +123,7 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
           if (run.runId) updateAssistantRunId(assistantMessageId, run.runId);
         }
         if (event === "stage") {
-          appendProcessStage(
-            assistantMessageId,
-            (data as { message: string }).message,
-          );
+          updateProcessStage(assistantMessageId, data as StageUpdate);
         }
         if (event === "tool") {
           updateToolActivity(assistantMessageId, data as ToolActivity);
@@ -168,16 +172,22 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
     await consumeSse(response.body, (event, data) => {
       if (event !== "replay") return;
       const replay = data as {
+        sequence: number;
         eventType: string;
         payload: Record<string, unknown>;
       };
       if (replay.eventType === "final_delta")
         recoveredText += String(replay.payload.text ?? "");
       if (replay.eventType === "stage_message") {
-        appendProcessStage(
-          assistantMessageId,
-          String(replay.payload.message ?? "正在恢复任务状态。"),
+        const message = String(
+          replay.payload.message ?? "正在恢复任务状态。",
         );
+        updateProcessStage(assistantMessageId, {
+          stageId: String(replay.payload.stageId ?? `replay:${replay.sequence}`),
+          delta: message,
+          status: "complete",
+          replace: true,
+        });
       }
       if (
         replay.eventType === "tool_started" ||
@@ -294,15 +304,42 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
     });
   }
 
-  /** 追加一条公开阶段说明，并完成上一条活跃阶段。 */
-  function appendProcessStage(messageId: string, message: string) {
-    updateMessageProcess(messageId, (process) => ({
-      ...process,
-      events: [
-        ...completeActiveStages(process.events),
-        { id: crypto.randomUUID(), kind: "stage", message, status: "active" },
-      ],
-    }));
+  /** 按 stageId 合并真实模型增量，新阶段开始时完成上一条阶段。 */
+  function updateProcessStage(messageId: string, update: StageUpdate) {
+    updateMessageProcess(messageId, (process) => {
+      const previous = process.events.findIndex(
+        (event) => event.kind === "stage" && event.id === update.stageId,
+      );
+      if (previous < 0) {
+        return {
+          ...process,
+          events: [
+            ...completeActiveStages(process.events),
+            {
+              id: update.stageId,
+              kind: "stage",
+              message: update.delta,
+              status: update.status,
+            },
+          ],
+        };
+      }
+
+      return {
+        ...process,
+        events: process.events.map((event, index) =>
+          index === previous && event.kind === "stage"
+            ? {
+                ...event,
+                message: update.replace
+                  ? update.delta
+                  : event.message + update.delta,
+                status: update.status,
+              }
+            : event,
+        ),
+      };
+    });
   }
 
   /** 最终结果开始或 Run 完成后，执行过程默认折叠。 */

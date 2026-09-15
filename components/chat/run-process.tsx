@@ -61,22 +61,12 @@ export function RunProcess({ process, onOpenChange }: RunProcessProps) {
         {process.events.map((event) =>
           event.kind === "stage" ? (
             <div className="pl-6" key={event.id}>
-              {/* 感觉和正文一样了 文字显示的有点一致 不好看 */}
-              {/* <MessageResponse>{event.message}</MessageResponse>*/}
-              {event.status === "active" ? (
-                <Shimmer
-                  as="p"
-                  className="text-sm leading-6"
-                  duration={1.8}
-                  spread={1.5}
-                >
-                  {event.message}
-                </Shimmer>
-              ) : (
-                <p className="text-sm leading-6">
-                  {event.message}
-                </p>
-              )}
+              <MessageResponse
+                className="text-sm leading-6 text-foreground"
+                isAnimating={true}
+              >
+                {event.message}
+              </MessageResponse>
             </div>
           ) : (
             <ChainOfThoughtStep
