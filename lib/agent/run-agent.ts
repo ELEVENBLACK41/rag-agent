@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent D9 受限多步问答 Agent 装配。
  *
  * 每个 Run 临时创建一个 Agent，避免把快照、候选来源或引用状态放在模块级单例。
@@ -10,7 +10,7 @@
  * edit by：Sliye
  */
 
-import { gateway, stepCountIs, ToolLoopAgent } from "ai";
+import { gateway, hasToolCall, stepCountIs, ToolLoopAgent } from "ai";
 import { createVaultTools } from "@/lib/agent/tools";
 import type { VaultRunState } from "@/lib/agent/run-state";
 
@@ -30,15 +30,24 @@ export function createVaultRunAgent(state: VaultRunState) {
       "先使用 search_notes 搜索，再使用 read_sources 阅读支持结论的来源。",
       "只能根据 read_sources 返回的内容作答；资料不足时明确说明，不要猜测。",
       "关键结论必须使用 read_sources 返回的【citationId】形式引用。",
+      "每次调用工具都要填写 briefing；它是展示给用户的公开阶段说明，不是私密思维。",
+      "读取足够证据后调用 finish_research，不在工具循环里输出完整最终答案。",
+      "如果不再调用工具，只输出不超过两句的公开证据小结：说明已确认内容和仍缺证据，不展开正式答案。",
       "不输出私密思维过程、工具内部参数、Chunk ID 或存储信息。",
       "工具只能读取资料，绝不能修改资料或调用网络。",
     ].join("\n"),
     tools: createVaultTools(state),
-    stopWhen: stepCountIs(MAX_AGENT_STEPS),
+    stopWhen: [hasToolCall("finish_research"), stepCountIs(MAX_AGENT_STEPS)],
     maxOutputTokens: MAX_AGENT_OUTPUT_TOKENS,
     reasoning: "none",
     prepareStep: ({ steps }) => {
       if (!steps.length) return { toolChoice: { type: "tool", toolName: "search_notes" } };
+      if (!state.getPermittedChunkCount()) {
+        return { toolChoice: { type: "tool", toolName: "finish_research" } };
+      }
+      if (!state.getCitationCount()) {
+        return { toolChoice: { type: "tool", toolName: "read_sources" } };
+      }
       return {};
     },
   });

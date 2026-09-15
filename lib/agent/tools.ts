@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent D9 只读知识库 Agent 工具定义。
  *
  * 工具只访问当前 Run 固定快照，且读取前必须来自本次搜索候选。不会提供文件写入、
@@ -27,6 +27,8 @@ export function createVaultTools(state: VaultRunState) {
     search_notes: tool({
       description: "在当前知识库快照中搜索与问题相关的候选资料。必须在回答前先调用。",
       inputSchema: z.object({
+        briefing: z.string().trim().min(1).max(200)
+          .describe("展示给用户的公开阶段说明：准备搜索什么、为什么搜索，1 至 2 句，不写最终结论"),
         query: z.string().trim().min(1).max(600).describe("用于检索知识库的具体问题"),
       }),
       strict: true,
@@ -47,6 +49,8 @@ export function createVaultTools(state: VaultRunState) {
     read_sources: tool({
       description: "读取搜索结果中的少量来源片段，并获得可用于最终回答的引用编号。",
       inputSchema: z.object({
+        briefing: z.string().trim().min(1).max(200)
+          .describe("展示给用户的公开阶段说明：准备核对哪些证据，1 至 2 句，不写最终结论"),
         chunkIds: z.array(z.string().uuid()).min(1).max(MAX_READ_CHUNKS_PER_CALL)
           .describe("必须来自 search_notes 或 find_related 返回结果的 Chunk ID"),
       }),
@@ -73,6 +77,8 @@ export function createVaultTools(state: VaultRunState) {
     find_related: tool({
       description: "基于已搜索到的一个来源片段，在当前快照中查找相关资料或补充证据。",
       inputSchema: z.object({
+        briefing: z.string().trim().min(1).max(200)
+          .describe("展示给用户的公开阶段说明：当前证据缺少什么、为何继续关联检索，1 至 2 句"),
         chunkId: z.string().uuid().describe("来自此前搜索结果的 Chunk ID"),
       }),
       strict: true,
@@ -95,6 +101,21 @@ export function createVaultTools(state: VaultRunState) {
               title: chunk.displayName,
               location: describeLocation(chunk),
             })),
+        };
+      },
+    }),
+    finish_research: tool({
+      description: "证据已经足够或本地资料确实不足时结束检索阶段，随后由独立生成器输出最终回答。",
+      inputSchema: z.object({
+        briefing: z.string().trim().min(1).max(200)
+          .describe("展示给用户的公开阶段结论：已确认了什么、仍缺少什么，1 至 2 句，不直接写完整答案"),
+      }),
+      strict: true,
+      execute: async () => {
+        state.beginToolCall();
+        return {
+          status: state.getCitationCount() ? "evidence-ready" : "insufficient-evidence",
+          citationCount: state.getCitationCount(),
         };
       },
     }),

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent 单次多步问答的工具与证据预算状态。
  *
  * State 只在当前服务器执行内存活，固定绑定一个索引快照。它不保存模型思维过程，
@@ -40,6 +40,10 @@ export function createVaultRunState(snapshotId: string, options: VaultRunStateOp
     permitChunks(chunkIds: string[]) {
       for (const chunkId of chunkIds) permittedChunkIds.add(chunkId);
     },
+    /** 供 Agent 步骤门禁判断搜索是否得到可读取候选。 */
+    getPermittedChunkCount() {
+      return permittedChunkIds.size;
+    },
     /** 防止模型构造任意 Chunk ID 绕过检索范围。 */
     assertReadable(chunkIds: string[]) {
       if (chunkIds.some((chunkId) => !permittedChunkIds.has(chunkId)))
@@ -55,6 +59,10 @@ export function createVaultRunState(snapshotId: string, options: VaultRunStateOp
     /** 按证据首次读取的顺序输出稳定引用编号。 */
     getCitations() {
       return [...citations.values()];
+    },
+    /** 供 Agent 步骤门禁判断是否已经读取真实证据。 */
+    getCitationCount() {
+      return citations.size;
     },
     recordRetrievalTrace(trace: RetrievalTrace) {
       return options.onRetrievalTrace(trace);

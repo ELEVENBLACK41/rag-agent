@@ -2,8 +2,8 @@
  * 修改时间：2026-09-14
  * 文件说明：VaultAgent D9 受限多步问答 Run 与事件持久化。
  *
- * 此文件固定一次问答的资料快照、流式事件和引用信息；当前直接组装有限检索上下文，
- * 格式专属来源读取仍由 lib/sources 处理，不承担文件格式逻辑。
+ * 此文件固定一次问答的资料快照、公开阶段事件和最终回答；Agent 只负责受限证据
+ * 收集，最终答案由独立流式生成器输出，避免阶段文本与正式结论混在一起。
  *
  * edit by：Sliye
  */
@@ -11,26 +11,33 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { gateway, streamText } from "ai";
+import { createVaultRunAgent } from "@/lib/agent/run-agent";
+import { createVaultRunState } from "@/lib/agent/run-state";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
-import {
-  getLatestPublishedSnapshot,
-  retrievePublishedChunksWithTrace,
-  type RetrievedChunk,
-} from "@/lib/retrieval/search";
+import { getLatestPublishedSnapshot } from "@/lib/retrieval/search";
+import { readSnapshotSources } from "@/lib/sources/reader";
 import type { SourceCitation } from "@/lib/sources/types";
-/** 单次直接问答使用已验证的主模型。 */
+/** Agent 与最终回答共同使用的已验证主模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
-/** 单次直接问答的输出上限，避免上下文与费用无界增长。 */
+/** 最终回答输出上限，避免上下文与费用无界增长。 */
 const MAX_OUTPUT_TOKENS = 1_200;
 /** 文本增量写入事件库的最短时间窗口，避免逐 token 写库。 */
 const EVENT_FLUSH_INTERVAL_MS = 300;
 /** 同一 Node 执行内串行化同一 Run 的事件写入，避免流式写库占用相同 sequence。 */
 const pendingEventWrites = new Map<string, Promise<void>>();
 
-/** 给前端展示的引用信息，引用必须来自本轮固定快照的检索证据。 */
+/** 给前端展示的引用信息，引用必须来自 Agent 实际读取的证据。 */
 export type ChatCitation = SourceCitation;
+
+/** 公开的工具活动摘要，不包含模型参数、来源正文或私密思维。 */
+export type ChatToolActivity = {
+  toolCallId: string;
+  toolName: string;
+  status: "started" | "completed" | "failed";
+  message: string;
+};
 
 // 一次问答执行的身份信息
 export type ChatRun = {
@@ -40,7 +47,8 @@ export type ChatRun = {
 };
 // 推送给浏览器的事件类型
 export type ChatStreamEvent =
-  | { type: "stage"; data: { message: string } } //阶段消息 例如 ：正在检索已发布的知识库快照
+  | { type: "stage"; data: { message: string } }
+  | { type: "tool"; data: ChatToolActivity }
   | { type: "delta"; data: { text: string } } //文本增量
   | { type: "complete"; data: { citations: ChatCitation[] } }; //完成事件，包含引用信息
 
@@ -117,10 +125,7 @@ export async function createChatRun(question: string, conversationId?: string): 
 }
 
 /**
- * 执行一次固定检索与一次模型生成，并持续产出可发布给浏览器的事件。
- *
- * 当前按用户决定停用 D9 的模型工具循环，恢复 DAY8 的直接上下文回答路径：检索完成后
- * 将有限候选正文一次性传给模型。检索与 rerank 的 Trace 仍会持久化，不影响来源授权。
+ * 执行受限多步证据收集，再单独流式生成最终回答。
  *
  * @param chatRun 已持久化的单轮问答 Run。
  * @param question 已保存的用户问题。
@@ -136,17 +141,73 @@ export async function* executeChatRun(
   question: string,
 ): AsyncGenerator<ChatStreamEvent> {
   try {
-    yield await createStageEvent(chatRun.runId, "正在检索已发布的知识库快照。");
-    const retrieval = await retrievePublishedChunksWithTrace(chatRun.snapshotId, question);
-    await appendRunEvent(chatRun.runId, "retrieval_trace", retrieval.trace);
-    const sources = retrieval.chunks;
-    if (!sources.length) throw new Error("当前资料中没有可用于回答的已索引文本块。");
+    const state = createVaultRunState(chatRun.snapshotId, {
+      onRetrievalTrace: (trace) => appendRunEvent(
+        chatRun.runId,
+        "retrieval_trace",
+        trace,
+      ),
+    });
+    const agent = createVaultRunAgent(state);
+    const agentResult = await agent.stream({ prompt: question });
+    let evidenceSummary = "";
 
-    const citations = toCitations(sources);
-    yield await createStageEvent(chatRun.runId, `已找到 ${sources.length} 个候选片段，正在生成回答。`);
-    const result = streamText({
+    // fullStream 提供真实工具边界；只发布显式 briefing 和公开证据小结，不读取 reasoning。
+    for await (const part of agentResult.fullStream) {
+      if (part.type === "text-delta") {
+        evidenceSummary += part.text;
+      }
+      if (part.type === "tool-call") {
+        const briefing = getPublicBriefing(part.input);
+        if (briefing) yield await createStageEvent(chatRun.runId, briefing);
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "started",
+          message: describeToolActivity(part.toolName, "started"),
+        });
+      }
+      if (part.type === "tool-result") {
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "completed",
+          message: describeToolActivity(part.toolName, "completed"),
+        });
+      }
+      if (part.type === "tool-error") {
+        yield await createToolEvent(chatRun.runId, {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          status: "failed",
+          message: describeToolActivity(part.toolName, "failed"),
+        });
+      }
+      if (part.type === "error") throw part.error;
+    }
+
+    if (evidenceSummary.trim()) {
+      yield await createStageEvent(
+        chatRun.runId,
+        evidenceSummary.trim().slice(0, 800),
+      );
+    }
+
+    const citations = state.getCitations();
+    if (!citations.length) {
+      throw new Error("Agent 未读取到可用于回答的知识库证据。");
+    }
+    const sources = await readSnapshotSources(
+      chatRun.snapshotId,
+      citations.map((citation) => citation.chunkId),
+    );
+    if (sources.length !== citations.length) {
+      throw new Error("Agent 已读取的部分证据当前不可用。");
+    }
+
+    const finalResult = streamText({
       model: gateway(CHAT_MODEL),
-      system: buildSystemInstruction(sources),
+      system: buildFinalInstruction(sources, citations),
       prompt: question,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       reasoning: "none",
@@ -155,7 +216,7 @@ export async function* executeChatRun(
     let answer = "";
     let pendingEventText = "";
     let lastEventFlushAt = Date.now();
-    for await (const textDelta of result.textStream) {
+    for await (const textDelta of finalResult.textStream) {
       answer += textDelta;
       pendingEventText += textDelta;
       yield { type: "delta", data: { text: textDelta } };
@@ -230,57 +291,28 @@ async function createStageEvent(runId: string, message: string): Promise<ChatStr
   return { type: "stage", data: { message } };
 }
 
-/** 将最终候选片段转换为稳定引用，编号与模型上下文中的【编号】一致。 */
-function toCitations(sources: RetrievedChunk[]): ChatCitation[] {
-  return sources.map((source, index) => ({
-    id: index + 1,
-    chunkId: source.chunkId,
-    displayName: source.displayName,
-    startLine: source.startLine,
-    endLine: source.endLine,
-    sourceLocator: source.sourceLocator,
-  }));
-}
-
-/** 构造只允许依据本轮候选资料作答的系统说明与受限上下文。 */
-function buildSystemInstruction(sources: RetrievedChunk[]) {
+/** 构造只允许依据 Agent 已读取证据作答的最终生成说明。 */
+function buildFinalInstruction(
+  sources: Awaited<ReturnType<typeof readSnapshotSources>>,
+  citations: ChatCitation[],
+) {
+  const citationIds = new Map(
+    citations.map((citation) => [citation.chunkId, citation.id]),
+  );
   const sourceText = sources
     .map(
-      (source, index) =>
-        `【${index + 1}】${source.displayName}（${describeSourceLocation(source)}）\n${source.content}`,
+      (source) =>
+        `【${citationIds.get(source.chunkId)}】${source.displayName}\n${source.content}`,
     )
     .join("\n\n");
 
   return [
-    "你是 VaultAgent。只根据以下知识库片段回答，资料不足时明确说明。",
+    "你是 VaultAgent。只根据 Agent 已读取的以下知识库证据回答，资料不足时明确说明。",
     "不要编造资料中不存在的内容，也不要输出私密思维过程。",
-    "引用关键结论时使用【编号】；编号必须来自提供的资料片段。",
-    "资料片段：",
+    "引用关键结论时使用【编号】；编号必须来自以下已读取证据。",
+    "已读取证据：",
     sourceText,
   ].join("\n\n");
-}
-
-/** 将跨格式来源定位压缩为模型与用户均可理解的短说明。 */
-function describeSourceLocation(source: RetrievedChunk) {
-  if (source.sourceLocator?.format === "pdf")
-    return `第 ${source.sourceLocator.pageNumber} 页`;
-  if (source.sourceLocator?.format === "pdf-visual")
-    return `第 ${source.sourceLocator.pageNumber} 页 · 视觉分析`;
-  if (source.sourceLocator?.format === "docx") {
-    return source.sourceLocator.blockType === "table"
-      ? `表格 ${source.sourceLocator.tableIndex ?? source.sourceLocator.blockIndex}`
-      : `段落 ${source.sourceLocator.blockIndex}`;
-  }
-  if (source.sourceLocator?.format === "docx-visual")
-    return `内嵌图片 ${source.sourceLocator.imageIndex} · 视觉分析`;
-  if (source.sourceLocator?.format === "xlsx")
-    return `工作表 ${source.sourceLocator.sheetName} · ${source.sourceLocator.range}`;
-  if (source.sourceLocator?.format === "xlsx-visual") {
-    return `工作表 ${source.sourceLocator.sheetName} · ${source.sourceLocator.anchor} · 内嵌图片 ${source.sourceLocator.imageIndex} · 视觉分析`;
-  }
-  if (source.startLine !== null && source.endLine !== null)
-    return `第 ${source.startLine}-${source.endLine} 行`;
-  return "位置不可用";
 }
 
 /**
@@ -319,6 +351,45 @@ async function writeRunEvent(runId: string, eventType: string, payload: object) 
     eventType,
     payload,
   });
+}
+
+/** 创建、持久化并发布一条脱敏工具活动。 */
+async function createToolEvent(
+  runId: string,
+  activity: ChatToolActivity,
+): Promise<ChatStreamEvent> {
+  await appendRunEvent(
+    runId,
+    activity.status === "started" ? "tool_started" : "tool_finished",
+    activity,
+  );
+  return { type: "tool", data: activity };
+}
+
+/** 只读取工具 Schema 显式要求的公开 briefing，不透出其他模型参数。 */
+function getPublicBriefing(input: unknown) {
+  if (!input || typeof input !== "object") return null;
+  const briefing = (input as { briefing?: unknown }).briefing;
+  return typeof briefing === "string" && briefing.trim()
+    ? briefing.trim().slice(0, 200)
+    : null;
+}
+
+/** 将工具名映射为公开短说明，避免透出参数、正文或内部错误。 */
+function describeToolActivity(
+  toolName: string,
+  status: ChatToolActivity["status"],
+) {
+  const labels: Record<string, string> = {
+    search_notes: "搜索知识库",
+    read_sources: "读取来源片段",
+    find_related: "查找关联资料",
+    finish_research: "完成证据收集",
+  };
+  const label = labels[toolName] ?? "执行受限工具";
+  if (status === "started") return `${label}…`;
+  if (status === "completed") return `${label}完成`;
+  return `${label}未完成`;
 }
 
 /** 同一事务提交最终回答、Run 终态与完成事件，避免刷新后出现双重完成。 */

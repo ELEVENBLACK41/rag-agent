@@ -19,7 +19,6 @@ import {
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import {
   PromptInput,
   PromptInputSubmit,
@@ -28,6 +27,11 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  RunProcess,
+  type RunProcessEvent,
+  type RunProcessState,
+} from "@/components/chat/run-process";
 import { SourceDrawer } from "@/components/sources/source-drawer";
 import { BookOpenIcon, FileTextIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import type { SourceCitation } from "@/lib/sources/types";
@@ -40,10 +44,12 @@ type ChatMessage = {
   content: string;
   runId?: string;
   citations?: Citation[];
+  process?: RunProcessState;
 };
 
 type ToolActivity = {
   toolCallId: string;
+  toolName: string;
   status: "started" | "completed" | "failed";
   message: string;
 };
@@ -57,10 +63,8 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [stageMessage, setStageMessage] = useState<string | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [toolActivities, setToolActivities] = useState<ToolActivity[]>([]);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSourceRunId, setSelectedSourceRunId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -75,12 +79,15 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
     setMessages((current) => [
       ...current,
       { id: crypto.randomUUID(), role: "user", content: question },
-      { id: assistantMessageId, role: "assistant", content: "" },
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        process: createRunningProcess(),
+      },
     ]);
     setInput("");
     setChatError(null);
-    setStageMessage("正在创建知识问答任务。");
-    setToolActivities([]);
     setIsStreaming(true);
 
     let activeRunId: string | null = null;
@@ -104,19 +111,24 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
           if (run.conversationId) setConversationId(run.conversationId);
           if (run.runId) updateAssistantRunId(assistantMessageId, run.runId);
         }
-        if (event === "stage") setStageMessage((data as { message: string }).message);
-        if (event === "tool") updateToolActivity(data as ToolActivity);
+        if (event === "stage") {
+          appendProcessStage(assistantMessageId, (data as { message: string }).message);
+        }
+        if (event === "tool") {
+          updateToolActivity(assistantMessageId, data as ToolActivity);
+        }
         if (event === "delta") appendAssistantText(assistantMessageId, (data as { text: string }).text);
         if (event === "complete") {
           updateAssistantCitations(assistantMessageId, (data as { citations: Citation[] }).citations);
           completed = true;
-          setStageMessage(null);
+          completeProcess(assistantMessageId);
         }
         if (event === "error") throw new Error((data as { message: string }).message);
       });
 
       if (!completed && activeRunId) await replayRunEvents(activeRunId, assistantMessageId);
     } catch (error) {
+      failProcess(assistantMessageId);
       setChatError(
         error instanceof DOMException && error.name === "AbortError"
           ? "已停止接收回答；刷新后可通过持久化事件补齐状态。"
@@ -125,7 +137,6 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
     } finally {
       abortControllerRef.current = null;
       setIsStreaming(false);
-      if (completed) setStageMessage(null);
     }
   }
 
@@ -139,11 +150,23 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
       if (event !== "replay") return;
       const replay = data as { eventType: string; payload: Record<string, unknown> };
       if (replay.eventType === "final_delta") recoveredText += String(replay.payload.text ?? "");
-      if (replay.eventType === "stage_message") setStageMessage(String(replay.payload.message ?? "正在恢复任务状态。"));
+      if (replay.eventType === "stage_message") {
+        appendProcessStage(
+          assistantMessageId,
+          String(replay.payload.message ?? "正在恢复任务状态。"),
+        );
+      }
+      if (
+        replay.eventType === "tool_started" ||
+        replay.eventType === "tool_finished"
+      ) {
+        updateToolActivity(assistantMessageId, replay.payload as ToolActivity);
+      }
       if (replay.eventType === "run_completed") {
         updateAssistantCitations(assistantMessageId, (replay.payload.citations as Citation[]) ?? []);
-        setStageMessage(null);
+        completeProcess(assistantMessageId);
       }
+      if (replay.eventType === "run_failed") failProcess(assistantMessageId);
     });
     if (recoveredText) replaceAssistantText(assistantMessageId, recoveredText);
   }
@@ -164,20 +187,36 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
     setConversationId(null);
     setMessages([]);
     setChatError(null);
-    setStageMessage(null);
-    setToolActivities([]);
     setSelectedCitation(null);
     setSelectedSourceRunId(null);
   }
 
   /** 将服务端文本增量追加到对应的助手消息。 */
   function appendAssistantText(messageId: string, text: string) {
-    setMessages((current) => current.map((item) => (item.id === messageId ? { ...item, content: item.content + text } : item)));
+    setMessages((current) => current.map((item) => {
+      if (item.id !== messageId) return item;
+      const isFirstFinalDelta = !item.content;
+      return {
+        ...item,
+        content: item.content + text,
+        process: isFirstFinalDelta && item.process
+          ? finishProcess(item.process, false)
+          : item.process,
+      };
+    }));
   }
 
   /** 使用断线补齐的完整内容替换临时助手消息，防止内容重复。 */
   function replaceAssistantText(messageId: string, text: string) {
-    setMessages((current) => current.map((item) => (item.id === messageId ? { ...item, content: text } : item)));
+    setMessages((current) => current.map((item) => (
+      item.id === messageId
+        ? {
+            ...item,
+            content: text,
+            process: item.process ? finishProcess(item.process, false) : item.process,
+          }
+        : item
+    )));
   }
 
   /** 更新助手消息的真实文档行号引用。 */
@@ -191,12 +230,58 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
   }
 
   /** 同一个工具调用更新一行公开状态，不渲染模型参数、工具输出或私密思维。 */
-  function updateToolActivity(activity: ToolActivity) {
-    setToolActivities((current) => {
-      const previous = current.findIndex((item) => item.toolCallId === activity.toolCallId);
-      if (previous < 0) return [...current, activity];
-      return current.map((item, index) => (index === previous ? activity : item));
+  function updateToolActivity(messageId: string, activity: ToolActivity) {
+    updateMessageProcess(messageId, (process) => {
+      const previous = process.events.findIndex(
+        (event) => event.kind === "tool" && event.id === activity.toolCallId,
+      );
+      const toolEvent: RunProcessEvent = {
+        id: activity.toolCallId,
+        kind: "tool",
+        message: activity.message,
+        status: activity.status,
+      };
+      const events = previous < 0
+        ? completeActiveStages([...process.events, toolEvent])
+        : process.events.map((event, index) => (index === previous ? toolEvent : event));
+      return { ...process, events };
     });
+  }
+
+  /** 追加一条公开阶段说明，并完成上一条活跃阶段。 */
+  function appendProcessStage(messageId: string, message: string) {
+    updateMessageProcess(messageId, (process) => ({
+      ...process,
+      events: [
+        ...completeActiveStages(process.events),
+        { id: crypto.randomUUID(), kind: "stage", message, status: "active" },
+      ],
+    }));
+  }
+
+  /** 最终结果开始或 Run 完成后，执行过程默认折叠。 */
+  function completeProcess(messageId: string) {
+    updateMessageProcess(messageId, (process) => finishProcess(process, false));
+  }
+
+  /** 失败过程保持展开，确保用户能看到停止位置。 */
+  function failProcess(messageId: string) {
+    updateMessageProcess(messageId, (process) => ({
+      ...finishProcess(process, true),
+      status: "failed",
+    }));
+  }
+
+  /** 更新指定助手消息自己的 Run 展示状态，避免后续消息覆盖旧过程。 */
+  function updateMessageProcess(
+    messageId: string,
+    update: (process: RunProcessState) => RunProcessState,
+  ) {
+    setMessages((current) => current.map((item) => (
+      item.id === messageId && item.process
+        ? { ...item, process: update(item.process) }
+        : item
+    )));
   }
 
   /** 打开引用时固定其所属 Run，防止新一轮问答覆盖来源上下文。 */
@@ -229,23 +314,29 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
             <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-5 py-8">
               {messages.length === 0 ? <ConversationEmptyState description={canChat ? "输入问题，VaultAgent 会检索已导入资料并给出可回溯引用。" : "请先导入并完成一批可索引文件的导入。"} icon={<MessageSquareIcon className="size-10" />} title="开始你的知识库对话" /> : messages.map((message) => (
                 <Message from={message.role} key={message.id}>
-                  <MessageContent>
-                    {message.role === "assistant" ? 
-                      (message.content ?
+                  {message.role === "assistant" && message.process && (
+                    <RunProcess
+                      onOpenChange={(open) => updateMessageProcess(
+                        message.id,
+                        (process) => process.status === "running"
+                          ? process
+                          : { ...process, open },
+                      )}
+                      process={message.process}
+                    />
+                  )}
+                  {(message.role === "user" || message.content) && <MessageContent>
+                    {message.role === "assistant" ?
+                      (
                         <MessageResponse
-                          isAnimating={isStreaming}
+                          isAnimating={isStreaming && message.id === messages.at(-1)?.id}
                         >
                           {message.content}
                         </MessageResponse>
-                        : isStreaming ? (
-                          <span aria-live="polite" className="text-sm">
-                            <Shimmer as="span">{stageMessage ?? "正在生成回答…"}</Shimmer>
-                          </span>
-                        ) : null
-                      ) : 
+                      ) :
                       message.content
                     }
-                  </MessageContent>
+                  </MessageContent>}
                   {message.role === "assistant" && message.citations && message.citations.length > 0 && <div className="flex flex-wrap gap-2">{message.citations.map((citation) => <Button className="h-6 gap-1 px-2 text-xs" disabled={!message.runId} key={citation.id} onClick={() => openCitation(message, citation)} size="sm" type="button" variant="outline"><FileTextIcon className="size-3" />【{citation.id}】{citation.displayName} · {getCitationLocation(citation)}</Button>)}</div>}
                 </Message>
               ))}
@@ -253,7 +344,6 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
             <ConversationScrollButton aria-label="回到底部" title="回到底部" />
           </Conversation>
           <div className="border-t border-border bg-card px-5 py-4"><div className="mx-auto w-full max-w-3xl space-y-2">
-            {toolActivities.length > 0 && <ul aria-label="知识库工具活动" className="space-y-1 text-sm text-muted-foreground">{toolActivities.map((activity) => <li key={activity.toolCallId}>{activity.status === "failed" ? "×" : activity.status === "completed" ? "✓" : "·"} {activity.message}</li>)}</ul>}
             {chatError && <p className="text-sm text-destructive" role="alert">{chatError}</p>}
             <PromptInput onSubmit={submitQuestion}><PromptInputTextarea disabled={!canChat || isStreaming} onChange={(event) => setInput(event.currentTarget.value)} placeholder={canChat ? "问问你的已导入资料…" : "完成 Markdown 索引后即可提问"} value={input} /><PromptInputSubmit disabled={!canChat || (!input.trim() && !isStreaming)} onStop={() => abortControllerRef.current?.abort()} status={isStreaming ? "streaming" : "ready"} /></PromptInput>
           </div></div>
@@ -320,4 +410,39 @@ async function consumeSse(stream: ReadableStream<Uint8Array>, onEvent: (event: s
 /** 将未知异常转换为用户可见的简短错误消息。 */
 function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "发生未知错误，请稍后重试。";
+}
+
+/** 创建只绑定当前助手消息的运行中过程状态。 */
+function createRunningProcess(): RunProcessState {
+  return {
+    status: "running",
+    startedAt: Date.now(),
+    open: true,
+    events: [{
+      id: crypto.randomUUID(),
+      kind: "stage",
+      message: "正在思考",
+      status: "active",
+    }],
+  };
+}
+
+/** 把当前活跃阶段改为已完成，保持事件原始顺序。 */
+function completeActiveStages(events: RunProcessEvent[]) {
+  return events.map((event) => (
+    event.kind === "stage" && event.status === "active"
+      ? { ...event, status: "complete" as const }
+      : event
+  ));
+}
+
+/** 固定执行过程耗时；成功默认折叠，失败保持展开。 */
+function finishProcess(process: RunProcessState, open: boolean): RunProcessState {
+  return {
+    ...process,
+    status: process.status === "failed" ? "failed" : "completed",
+    completedAt: process.completedAt ?? Date.now(),
+    open,
+    events: completeActiveStages(process.events),
+  };
 }
