@@ -15,6 +15,7 @@ import {
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 
 export type RunProcessEvent =
   | {
@@ -60,13 +61,41 @@ export function RunProcess({ process, onOpenChange }: RunProcessProps) {
         {process.events.map((event) =>
           event.kind === "stage" ? (
             <div className="pl-6" key={event.id}>
-              <MessageResponse>{event.message}</MessageResponse>
+              {/* 感觉和正文一样了 文字显示的有点一致 不好看 */}
+              {/* <MessageResponse>{event.message}</MessageResponse>*/}
+              {event.status === "active" ? (
+                <Shimmer
+                  as="p"
+                  className="text-sm leading-6"
+                  duration={1.8}
+                  spread={1.5}
+                >
+                  {event.message}
+                </Shimmer>
+              ) : (
+                <p className="text-sm leading-6">
+                  {event.message}
+                </p>
+              )}
             </div>
           ) : (
             <ChainOfThoughtStep
               icon={getToolIcon(event.status)}
               key={event.id}
-              label={event.message}
+              label={
+                event.status === "started" ? (
+                  <Shimmer
+                    as="span"
+                    className="text-sm"
+                    duration={1.8}
+                    spread={1.5}
+                  >
+                    {event.message}
+                  </Shimmer>
+                ) : (
+                  event.message
+                )
+              }
               status={event.status === "started" ? "active" : "complete"}
             />
           ),
