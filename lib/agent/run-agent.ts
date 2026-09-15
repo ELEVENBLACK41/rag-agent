@@ -41,14 +41,14 @@ export function createVaultRunAgent(state: VaultRunState) {
     maxOutputTokens: MAX_AGENT_OUTPUT_TOKENS,
     reasoning: "none",
     prepareStep: ({ steps }) => {
-      if (!steps.length) return { toolChoice: { type: "tool", toolName: "search_notes" } };
-      if (!state.getPermittedChunkCount()) {
-        return { toolChoice: { type: "tool", toolName: "finish_research" } };
+      if (!steps.length) {
+        return {
+          toolChoice: "auto",
+        };
       }
-      if (!state.getCitationCount()) {
-        return { toolChoice: { type: "tool", toolName: "read_sources" } };
-      }
-      return {};
+
+      // 后续再根据 state 做安全约束
+      // ...
     },
   });
 }

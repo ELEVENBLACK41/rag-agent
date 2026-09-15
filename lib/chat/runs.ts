@@ -160,29 +160,29 @@ export async function* executeChatRun(
       if (part.type === "tool-call") {
         const briefing = getPublicBriefing(part.input);
         if (briefing) yield await createStageEvent(chatRun.runId, briefing);
-        yield await createToolEvent(chatRun.runId, {
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          status: "started",
-          message: describeToolActivity(part.toolName, "started"),
-        });
-      }
+          yield await createToolEvent(chatRun.runId, {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            status: "started",
+            message: describeToolActivity(part.toolName, "started"),
+          });
+        }
       if (part.type === "tool-result") {
-        yield await createToolEvent(chatRun.runId, {
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          status: "completed",
-          message: describeToolActivity(part.toolName, "completed"),
-        });
-      }
+          yield await createToolEvent(chatRun.runId, {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            status: "completed",
+            message: describeToolActivity(part.toolName, "completed"),
+          });
+        }
       if (part.type === "tool-error") {
-        yield await createToolEvent(chatRun.runId, {
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          status: "failed",
-          message: describeToolActivity(part.toolName, "failed"),
-        });
-      }
+          yield await createToolEvent(chatRun.runId, {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            status: "failed",
+            message: describeToolActivity(part.toolName, "failed"),
+          });
+        }
       if (part.type === "error") throw part.error;
     }
 
