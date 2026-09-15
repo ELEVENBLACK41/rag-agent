@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-13
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent DAY8 已发布快照的混合检索与重排序。
  *
  * 本模块只读取固定快照：关键词、向量、RRF 与 rerank 的每一步都返回不含正文的
@@ -10,7 +10,7 @@
  * edit by：Sliye
  */
 
-import { and, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { cosineDistance } from "drizzle-orm/sql/functions/vector";
 import { embed, gateway, rerank } from "ai";
 import {
@@ -97,11 +97,12 @@ export async function retrievePublishedChunksWithTrace(
 ): Promise<RetrievalResult> {
   //从keyword提取出来的关键词keywordTerms
   const keywordTerms = extractKeywordTerms(question);
+  const activeFileVersionIds = await getActiveSnapshotFileVersionIds(snapshotId);
   const [keywordCandidates, vectorResult] = await Promise.all([
     //关键词候选
-    retrieveKeywordCandidates(snapshotId, keywordTerms),
+    retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds),
     //向量候选
-    retrieveVectorCandidates(snapshotId, question),
+    retrieveVectorCandidates(snapshotId, question, activeFileVersionIds),
   ]);
   const fusedCandidates = fuseWithRrf<RetrievedChunk>(
     keywordCandidates,
@@ -113,7 +114,7 @@ export async function retrievePublishedChunksWithTrace(
   const reranked = await rerankCandidates(question, fusedCandidates);
 
   const trace: RetrievalTrace = {
-    version: "day8-hybrid-v1",
+    version: "day8-hybrid-v2-latest-file",
     keywordTerms,
     keywordCandidateIds: keywordCandidates.map((candidate) => candidate.chunkId),
     vectorCandidateIds: vectorResult.candidates.map((candidate) => candidate.chunkId),
@@ -141,8 +142,9 @@ export async function retrievePublishedChunksWithTrace(
 async function retrieveKeywordCandidates(
   snapshotId: string,
   terms: string[],
+  activeFileVersionIds: string[],
 ): Promise<RetrievedChunk[]> {
-  if (!terms.length) return [];
+  if (!terms.length || !activeFileVersionIds.length) return [];
 
   const matchExpressions = terms.map(
     (term) =>
@@ -170,7 +172,7 @@ async function retrieveKeywordCandidates(
     .innerJoin(fileVersions, eq(chunks.fileVersionId, fileVersions.id))
     .innerJoin(indexSnapshotFiles, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
     .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
-    .where(publishedChunkScope(snapshotId, matchesAnyTerm))
+    .where(publishedChunkScope(snapshotId, activeFileVersionIds, matchesAnyTerm))
     .orderBy(desc(keywordScore), chunks.id)
     .limit(RETRIEVAL_CANDIDATE_LIMIT);
 
@@ -181,8 +183,12 @@ async function retrieveKeywordCandidates(
 async function retrieveVectorCandidates(
   snapshotId: string,
   question: string,
+  activeFileVersionIds: string[],
 ): Promise<VectorCandidateResult> {
   try {
+    if (!activeFileVersionIds.length) {
+      return { status: "completed", candidates: [] };
+    }
     if (!process.env.AI_GATEWAY_API_KEY) {
       throw new Error("AI_GATEWAY_API_KEY is required before vector retrieval.");
     }
@@ -219,7 +225,7 @@ async function retrieveVectorCandidates(
       .innerJoin(fileVersions, eq(chunks.fileVersionId, fileVersions.id)) //连接文件版本表
       .innerJoin(indexSnapshotFiles, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
       .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id)) //连接逻辑文件表
-      .where(publishedChunkScope(snapshotId, isNotNull(chunks.embedding)))
+      .where(publishedChunkScope(snapshotId, activeFileVersionIds, isNotNull(chunks.embedding)))
       .orderBy(distance) //按距离升序排列，距离越小，相似度越高
       .limit(RETRIEVAL_CANDIDATE_LIMIT);
     return {
@@ -323,15 +329,56 @@ function fallbackToFusion(
   };
 }
 
-/** 统一固定快照、文件状态与删除过滤，避免两条候选路径发生数据范围差异。 */
-function publishedChunkScope(snapshotId: string, extraWhere: ReturnType<typeof sql>) {
+/**
+ * 统一固定快照成员、文件状态与删除过滤。
+ * Chunk 的 snapshotId 是它首次解析时的候选快照，不代表后续继承它的快照成员关系。
+ */
+function publishedChunkScope(
+  snapshotId: string,
+  activeFileVersionIds: string[],
+  extraWhere: ReturnType<typeof sql>,
+) {
   return and(
     eq(indexSnapshotFiles.snapshotId, snapshotId),
-    eq(chunks.snapshotId, snapshotId),
+    inArray(fileVersions.id, activeFileVersionIds),
     eq(fileVersions.status, "indexed"),
     isNull(logicalFiles.deletedAt),
     extraWhere,
   );
+}
+
+/**
+ * 在一个固定快照内按 Vault 相对路径选出最新写入版本。
+ * 历史数据若因早期缺少唯一约束产生重复逻辑文件，也不会再同时进入检索。
+ *
+ * @param snapshotId 本次 Run 固定使用的已发布快照。
+ */
+async function getActiveSnapshotFileVersionIds(snapshotId: string) {
+  const records = await getDatabase()
+    .select({
+      id: fileVersions.id,
+      sourcePath: logicalFiles.sourcePath,
+      displayName: logicalFiles.displayName,
+    })
+    .from(indexSnapshotFiles)
+    .innerJoin(fileVersions, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
+    .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
+    .where(
+      and(
+        eq(indexSnapshotFiles.snapshotId, snapshotId),
+        isNull(logicalFiles.deletedAt),
+      ),
+    )
+    .orderBy(desc(fileVersions.createdAt), desc(fileVersions.id));
+  const latestByPath = new Map<string, string>();
+
+  for (const record of records) {
+    // D3 旧数据没有 sourcePath，使用文件名与后续同名根目录文件对齐。
+    const identity = record.sourcePath ?? record.displayName;
+    if (!latestByPath.has(identity)) latestByPath.set(identity, record.id);
+  }
+
+  return [...latestByPath.values()];
 }
 
 /** 将数据库 JSON 定位字段恢复为跨格式的受限类型。 */

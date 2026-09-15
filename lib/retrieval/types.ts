@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-13
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent DAY8 跨格式检索结果与可审计 Trace 类型。
  *
  * edit by：Sliye
@@ -42,7 +42,7 @@ export type RerankTrace =
 
 /** DAY8 每次检索的脱敏排序记录；只保存 Chunk ID 与配置，不复制私人正文。 */
 export type RetrievalTrace = {
-  version: "day8-hybrid-v1";
+  version: "day8-hybrid-v2-latest-file";
   keywordTerms: string[];
   keywordCandidateIds: string[];
   vectorCandidateIds: string[];

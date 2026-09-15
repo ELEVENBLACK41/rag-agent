@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent D9 知识库聊天工作台。
  *
  * 页面组合导入面板、Agent 公开工具活动、聊天流和可点击引用；来源正文由右侧
@@ -11,6 +11,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import {
   Conversation,
   ConversationContent,
@@ -27,10 +28,8 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ImportPanel } from "@/components/chat/import-panel";
-import { useImportBatch } from "@/components/chat/use-import-batch";
 import { SourceDrawer } from "@/components/sources/source-drawer";
-import { FileTextIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { BookOpenIcon, FileTextIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import type { SourceCitation } from "@/lib/sources/types";
 
 type Citation = SourceCitation;
@@ -49,9 +48,12 @@ type ToolActivity = {
   message: string;
 };
 
-/** D4 本地工作台：导入受限 Vault、等待索引、进行单轮问答并展示引用。 */
-export function VaultWorkspace() {
-  const { batch, canChat, error: importError, isUploading, removeFile, upload } = useImportBatch();
+type VaultWorkspaceProps = {
+  canChat: boolean;
+};
+
+/** 本地聊天工作台：使用当前已发布知识库快照进行问答并展示引用。 */
+export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -211,7 +213,7 @@ export function VaultWorkspace() {
           <div className="space-y-1"><p className="text-lg font-semibold">VaultAgent</p><p className="text-sm text-muted-foreground">多格式知识问答</p></div>
           <Button className="w-full" onClick={startNewConversation} type="button" variant="outline"><PlusIcon className="size-4" /> 新建会话</Button>
           <Separator />
-          <ImportPanel batch={batch} error={importError} isUploading={isUploading} onRemoveFile={removeFile} onUpload={upload} />
+          <Button asChild className="w-full" variant="ghost"><Link href="/library"><BookOpenIcon className="size-4" /> 管理知识库</Link></Button>
           <p className="mt-auto text-xs leading-5 text-muted-foreground">删除会话不会删除知识库文件；删除文件会发布不含该文件的新快照。</p>
         </div>
       </aside>
@@ -219,11 +221,9 @@ export function VaultWorkspace() {
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-border px-5 py-4">
           <div><h1 className="font-semibold">我的知识库</h1><p className="text-sm text-muted-foreground">单轮真实检索、流式回答与来源定位引用</p></div>
+          <Button asChild className="lg:hidden" size="sm" variant="outline"><Link href="/library"><BookOpenIcon className="size-4" /> 知识库</Link></Button>
           {conversationId && <Button disabled={isStreaming} onClick={removeConversation} size="sm" type="button" variant="ghost"><Trash2Icon className="size-4" /> 删除会话</Button>}
         </header>
-        <div className="border-b border-border px-5 py-3 lg:hidden">
-          <ImportPanel batch={batch} error={importError} isUploading={isUploading} onRemoveFile={removeFile} onUpload={upload} />
-        </div>
         <div className="flex min-h-0 flex-1 flex-col">
           <Conversation className="min-h-0 flex-1">
             <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-5 py-8">

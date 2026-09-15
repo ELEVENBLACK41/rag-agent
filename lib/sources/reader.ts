@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent 固定 Run 快照下的来源读取与原文件访问授权。
  *
  * 所有来源读取都从 Run、快照、Chunk 和文件版本重新建立关系。调用方只能得到
@@ -57,7 +57,6 @@ export async function readSnapshotSources(
     .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
     .where(
       and(
-        eq(chunks.snapshotId, snapshotId),
         inArray(chunks.id, chunkIds),
         eq(fileVersions.status, "indexed"),
         isNull(logicalFiles.deletedAt),
@@ -103,15 +102,12 @@ export async function getRunSourceRecord(runId: string, chunkId: string) {
     })
     .from(runs)
     .innerJoin(conversations, eq(runs.conversationId, conversations.id))
-    .innerJoin(chunks, eq(chunks.snapshotId, runs.snapshotId))
-    .innerJoin(fileVersions, eq(chunks.fileVersionId, fileVersions.id))
     .innerJoin(
       indexSnapshotFiles,
-      and(
-        eq(indexSnapshotFiles.snapshotId, runs.snapshotId),
-        eq(indexSnapshotFiles.fileVersionId, fileVersions.id),
-      ),
+      eq(indexSnapshotFiles.snapshotId, runs.snapshotId),
     )
+    .innerJoin(fileVersions, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
+    .innerJoin(chunks, eq(chunks.fileVersionId, fileVersions.id))
     .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
     .where(
       and(

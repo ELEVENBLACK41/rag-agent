@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent 多文件导入批次、版本与候选快照发布。
  *
  * 此模块是文件版本、批次状态和快照原子切换的业务事实来源；格式解析与视觉
@@ -9,7 +9,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, ne, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, notInArray } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import {
   fileVersions,
@@ -224,6 +224,86 @@ export async function getLocalImportBatchStatus(batchId: string) {
       ...file,
       diagnostics: diagnosticsByImport.get(file.id) ?? [],
       visualAssets: visualAssetsByImport.get(file.id) ?? [],
+    })),
+  };
+}
+
+/**
+ * 读取当前已发布快照中的文件清单。每个逻辑路径只会出现快照实际使用的版本，
+ * 因此列表中的“AI 当前使用”与检索范围保持一致。
+ */
+export async function getCurrentLibraryFiles() {
+  const db = getDatabase();
+  const [snapshot] = await db
+    .select({
+      id: indexSnapshots.id,
+      publishedAt: indexSnapshots.publishedAt,
+    })
+    .from(indexSnapshots)
+    .where(
+      and(
+        eq(indexSnapshots.workspaceId, LOCAL_WORKSPACE_ID),
+        eq(indexSnapshots.status, "published"),
+      ),
+    )
+    .orderBy(desc(indexSnapshots.publishedAt))
+    .limit(1);
+
+  if (!snapshot) return { snapshotId: null, publishedAt: null, files: [] };
+
+  const files = await db
+    .select({
+      id: imports.id,
+      status: imports.status,
+      errorMessage: imports.errorMessage,
+      displayName: logicalFiles.displayName,
+      sourcePath: logicalFiles.sourcePath,
+      mediaType: fileVersions.mediaType,
+      versionNumber: fileVersions.versionNumber,
+      byteSize: fileVersions.byteSize,
+      updatedAt: fileVersions.createdAt,
+    })
+    .from(indexSnapshotFiles)
+    .innerJoin(fileVersions, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
+    .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
+    .innerJoin(imports, eq(imports.fileVersionId, fileVersions.id))
+    .where(
+      and(
+        eq(indexSnapshotFiles.snapshotId, snapshot.id),
+        isNull(logicalFiles.deletedAt),
+      ),
+    )
+    .orderBy(desc(fileVersions.createdAt), desc(fileVersions.id));
+
+  const latestFilesByPath = new Map<string, (typeof files)[number]>();
+  for (const file of files) {
+    // D3 旧数据没有 sourcePath，使用当时保存的文件名与后续同名根目录文件对齐。
+    const identity = file.sourcePath ?? file.displayName;
+    if (!latestFilesByPath.has(identity)) latestFilesByPath.set(identity, file);
+  }
+  const activeFiles = [...latestFilesByPath.values()].sort((left, right) =>
+    (left.sourcePath ?? left.displayName).localeCompare(
+      right.sourcePath ?? right.displayName,
+      "zh-CN",
+    ),
+  );
+
+  return {
+    snapshotId: snapshot.id,
+    publishedAt: snapshot.publishedAt,
+    files: activeFiles.map((file) => ({
+      id: file.id,
+      status: file.status,
+      errorMessage: file.errorMessage,
+      displayName: file.displayName,
+      sourcePath: file.sourcePath,
+      mediaType: file.mediaType,
+      versionNumber: file.versionNumber,
+      byteSize: file.byteSize,
+      updatedAt: file.updatedAt,
+      isActiveVersion: true as const,
+      diagnostics: [],
+      visualAssets: [],
     })),
   };
 }

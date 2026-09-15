@@ -1,6 +1,6 @@
 /**
- * 修改时间：2026-09-12
- * 文件说明：VaultAgent 多文件与 ZIP 导入面板。
+ * 修改时间：2026-09-15
+ * 文件说明：VaultAgent 多文件上传与当前知识库文件清单。
  *
  * 面板展示批次真实状态、格式解析警告和视觉资产进度；它不根据文件扩展名
  * 推测能力，所有可见状态均来自服务端已持久化的导入记录。
@@ -14,21 +14,22 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import type { ImportBatchState } from "@/components/chat/use-import-batch";
+import type { ImportBatchState, ImportFileState } from "@/components/chat/use-import-batch";
 
 type ImportPanelProps = {
   batch: ImportBatchState | null;
   error: string | null;
+  files: ImportFileState[];
+  isLoading: boolean;
   isUploading: boolean;
   onRemoveFile: (importId: string) => void;
   onUpload: (files: File[]) => void;
 };
 
 /** 展示导入入口、批次状态和可删除的已保存文件。 */
-export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload }: ImportPanelProps) {
+export function ImportPanel({ batch, error, files, isLoading, isUploading, onRemoveFile, onUpload }: ImportPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const files = batch?.files ?? [];
 
   /** 统一处理系统文件选择和拖拽文件，避免两条上传逻辑漂移。 */
   function submitFiles(selectedFiles: FileList | File[]) {
@@ -38,7 +39,8 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
   }
 
   return (
-    <Card>
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
+    <Card className="h-fit">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base"><FolderUpIcon className="size-4" /> 导入知识库</CardTitle>
         <CardDescription>支持多选、拖拽或 ZIP。MD、TXT、PDF、DOCX 和 XLSX 会建立索引；图片作为附件保留。</CardDescription>
@@ -73,12 +75,27 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
         {isUploading && <Badge variant="secondary">正在保存并建立候选索引…</Badge>}
         {batch && <BatchStatus status={batch.status} />}
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-        {files.length > 0 && <ul className="space-y-2" aria-label="导入文件列表">
+      </CardContent>
+    </Card>
+    <Card>
+      <CardHeader>
+        <CardTitle>现有知识库文件</CardTitle>
+        <CardDescription>列表来自当前已发布快照；同一路径再次导入会生成新版本，并替换后续 AI 检索所用版本。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading && <p className="text-sm text-muted-foreground">正在读取知识库文件…</p>}
+        {!isLoading && files.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center"><FileTextIcon className="mx-auto mb-3 size-6 text-muted-foreground" /><p className="font-medium">知识库还是空的</p><p className="mt-1 text-sm text-muted-foreground">从左侧上传第一批资料，完成后会自动出现在这里。</p></div>}
+        {files.length > 0 && <ul className="divide-y divide-border" aria-label="知识库文件列表">
           {files.map((file) => (
-            <li className="space-y-1 text-sm" key={file.id}>
-              <div className="flex items-center gap-2">
+            <li className="space-y-2 py-4 first:pt-0 last:pb-0" key={file.id}>
+              <div className="flex items-start gap-3">
                 {file.mediaType.startsWith("image/") ? <ImageIcon className="size-4 text-muted-foreground" /> : <FileTextIcon className="size-4 text-muted-foreground" />}
-                <span className="min-w-0 flex-1 truncate">{file.sourcePath ?? file.displayName}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{file.sourcePath ?? file.displayName}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{formatFileSize(file.byteSize)}{file.updatedAt ? ` · ${formatDate(file.updatedAt)}` : ""}</p>
+                </div>
+                {file.versionNumber && <Badge variant="outline">v{file.versionNumber}</Badge>}
+                {file.isActiveVersion && <Badge>AI 当前使用</Badge>}
                 <Badge variant={file.status === "failed" ? "destructive" : "secondary"}>{getFileStatusLabel(file.status, file.mediaType)}</Badge>
                 {file.status !== "deleted" && <Button aria-label={`删除 ${file.displayName}`} onClick={() => onRemoveFile(file.id)} size="icon-sm" type="button" variant="ghost"><Trash2Icon className="size-4" /></Button>}
               </div>
@@ -97,7 +114,24 @@ export function ImportPanel({ batch, error, isUploading, onRemoveFile, onUpload 
         </ul>}
       </CardContent>
     </Card>
+    </div>
   );
+}
+
+/** 将字节数转换为紧凑的文件大小。 */
+function formatFileSize(byteSize?: number) {
+  if (byteSize === undefined) return "大小未知";
+  if (byteSize < 1_024) return `${byteSize} B`;
+  if (byteSize < 1_024 * 1_024) return `${(byteSize / 1_024).toFixed(1)} KB`;
+  return `${(byteSize / 1_024 / 1_024).toFixed(1)} MB`;
+}
+
+/** 使用本地时间展示版本写入时间。 */
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function BatchStatus({ status }: { status: ImportBatchState["status"] }) {

@@ -1,6 +1,6 @@
 /**
- * 修改时间：2026-09-12
- * 文件说明：VaultAgent 导入批次状态与轮询 Hook。
+ * 修改时间：2026-09-15
+ * 文件说明：VaultAgent 知识库清单、导入批次状态与轮询 Hook。
  *
  * Hook 只管理浏览器上传、轮询和删除后的视图状态；服务端返回的诊断与视觉
  * 资产保持原样，便于新增格式时不在客户端复制业务判断。
@@ -8,7 +8,7 @@
  * edit by：Sliye
  */
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type ImportFileState = {
   id: string;
@@ -17,6 +17,10 @@ export type ImportFileState = {
   displayName: string;
   sourcePath: string | null;
   mediaType: string;
+  versionNumber?: number;
+  byteSize?: number;
+  updatedAt?: string;
+  isActiveVersion?: boolean;
   diagnostics: Array<{
     severity: "warning";
     stage: "parse";
@@ -29,6 +33,12 @@ export type ImportFileState = {
     status: string;
     errorMessage: string | null;
   }>;
+};
+
+export type KnowledgeLibraryState = {
+  snapshotId: string | null;
+  publishedAt: string | null;
+  files: ImportFileState[];
 };
 
 export type ImportBatchState = {
@@ -46,8 +56,42 @@ const IMPORT_STATUS_INTERVAL_MS = 1_000;
 /** 处理多文件/ZIP 上传、批次轮询和单个逻辑文件删除。 */
 export function useImportBatch() {
   const [batch, setBatch] = useState<ImportBatchState | null>(null);
+  const [library, setLibrary] = useState<KnowledgeLibraryState | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /** 从服务端重新读取当前已发布快照，避免把浏览器内存当作知识库事实来源。 */
+  const refreshLibrary = useCallback(async () => {
+    try {
+      const result = await requestLibrary();
+      setLibrary(result);
+      setError(null);
+    } catch (loadError) {
+      setError(toErrorMessage(loadError));
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+    requestLibrary()
+      .then((result) => {
+        if (isCancelled) return;
+        setLibrary(result);
+        setError(null);
+      })
+      .catch((loadError: unknown) => {
+        if (!isCancelled) setError(toErrorMessage(loadError));
+      })
+      .finally(() => {
+        if (!isCancelled) setIsLoading(false);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   /** 上传一批浏览器文件，并在后台索引完成时更新展示状态。 */
   async function upload(files: File[]) {
@@ -63,6 +107,7 @@ export function useImportBatch() {
       const result = (await response.json()) as { batchId?: string; error?: string };
       if (!response.ok || !result.batchId) throw new Error(result.error ?? "无法创建导入任务。");
       await waitForBatch(result.batchId);
+      await refreshLibrary();
     } catch (uploadError) {
       setError(toErrorMessage(uploadError));
     } finally {
@@ -78,10 +123,7 @@ export function useImportBatch() {
       setError(result.error ?? "无法删除文件。");
       return;
     }
-    setBatch((current) => current && {
-      ...current,
-      files: current.files.map((file) => (file.id === importId ? { ...file, status: "deleted" } : file)),
-    });
+    await refreshLibrary();
   }
 
   /** 从业务 API 获取一次批次状态，并在尚未完成时继续轮询。 */
@@ -100,12 +142,22 @@ export function useImportBatch() {
 
   return {
     batch,
-    canChat: batch?.status === "completed",
     error,
+    isLoading,
     isUploading,
+    library,
     removeFile,
+    refreshLibrary,
     upload,
   };
+}
+
+/** 请求当前已发布知识库清单；状态写入由调用方决定。 */
+async function requestLibrary() {
+  const response = await fetch("/api/imports", { cache: "no-store" });
+  const result = (await response.json()) as KnowledgeLibraryState & { error?: string };
+  if (!response.ok) throw new Error(result.error ?? "无法读取知识库文件。");
+  return result;
 }
 
 /** 读取文件夹选择器保留的相对路径；普通选择或拖拽则回退到文件名。 */

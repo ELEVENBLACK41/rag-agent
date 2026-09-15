@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent 多文件与 ZIP 导入 API | edit by：Sliye
+ * 修改时间：2026-09-15 | 文件说明：VaultAgent 知识库文件清单与导入 API | edit by：Sliye
  */
 
 import { z } from "zod";
@@ -9,12 +9,25 @@ import { ImportValidationError } from "@/lib/ingestion/errors";
 import { collectVaultUploadFiles } from "@/lib/ingestion/intake";
 import {
   createLocalImportBatch,
+  getCurrentLibraryFiles,
   recordImportBatchDispatchError,
   setImportBatchWorkflowRun,
 } from "@/lib/ingestion/imports";
 import { ingestImportBatchWorkflow } from "@/workflows/ingest-import-batch";
 
 export const runtime = "nodejs";
+
+/** 返回当前已发布快照的文件清单，刷新页面后仍以数据库事实为准。 */
+export async function GET(request: Request) {
+  if (!canAccessD3LocalFeature(request)) {
+    return Response.json(
+      { error: "Knowledge library is unavailable in this deployment mode." },
+      { status: 403 },
+    );
+  }
+
+  return Response.json(await getCurrentLibraryFiles());
+}
 
 /** 单次请求中的客户端 Vault 相对路径数组。 */
 const importPathsSchema = z.array(z.string().min(1).max(1_024)).max(50);
