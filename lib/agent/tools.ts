@@ -25,7 +25,7 @@ import {
 export function createVaultTools(state: VaultRunState) {
   return {
     search_notes: tool({
-      description: "在当前知识库快照中搜索与问题相关的候选资料。必须在回答前先调用。",
+      description: "在当前知识库快照中搜索与问题相关的内容候选。需要文档事实或证据时使用；问候、致谢无需调用，也不能用搜索结果代替完整文件清单。",
       inputSchema: z.object({
         briefing: z.string().trim().min(1).max(200)
           .describe("展示给用户的公开阶段说明：准备搜索什么、为什么搜索，1 至 2 句，不写最终结论"),

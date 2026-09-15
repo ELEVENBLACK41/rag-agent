@@ -1,9 +1,9 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-15
  * 文件说明：VaultAgent D9 受限多步问答 Run 与事件持久化。
  *
  * 此文件固定一次问答的资料快照、公开阶段事件和最终回答；Agent 只负责受限证据
- * 收集，最终答案由独立流式生成器输出，避免阶段文本与正式结论混在一起。
+ * 收集；未调用工具时直接保存 Agent 回答，调用工具后由独立生成器输出最终答案。
  *
  * edit by：Sliye
  */
@@ -56,7 +56,8 @@ export type ChatRun = {
 export type ChatStreamEvent =
   | { type: "stage"; data: ChatStageUpdate }
   | { type: "tool"; data: ChatToolActivity }
-  | { type: "delta"; data: { text: string } } //文本增量
+  | { type: "delta"; data: { text: string; provisional?: boolean } } // 未确定是否调用工具的文字也实时展示
+  | { type: "answer-stage"; data: { stages: ChatStageUpdate[] } }
   | { type: "complete"; data: { citations: ChatCitation[] } }; //完成事件，包含引用信息
 
 /**
@@ -132,7 +133,7 @@ export async function createChatRun(question: string, conversationId?: string): 
 }
 
 /**
- * 执行受限多步证据收集，再单独流式生成最终回答。
+ * 未调用工具时直接完成回答；调用工具后执行受限证据收集与独立最终生成。
  *
  * @param chatRun 已持久化的单轮问答 Run。
  * @param question 已保存的用户问题。
@@ -162,22 +163,60 @@ export async function* executeChatRun(
       { json: string; briefing: string }
     >();
     const textStreams = new Map<string, string>();
+    /** 首段实时展示；首次调用工具后将已展示文字转入过程区。 */
+    let hasUsedTools = false;
+    /** 首段正文按时间窗口保存，SSE 仍逐模型增量推送。 */
+    let pendingInitialText = "";
+    let lastInitialFlushAt = Date.now();
+    /** 区分尚未检索与检索后无证据，避免最终回答伪称查过知识库。 */
+    let hasSearched = false;
+    /** 无证据且工具失败时仍保留异常，不能把服务故障包装成普通无答案。 */
+    let hasToolError = false;
 
     // fullStream 同时提供模型文本和工具参数增量；只发布公开文本，不读取 reasoning。
     for await (const part of agentResult.fullStream) {
+      if (!hasUsedTools && (part.type === "tool-input-start" || part.type === "tool-call")) {
+        hasUsedTools = true;
+        if (pendingInitialText) {
+          await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
+          pendingInitialText = "";
+        }
+        const stages: ChatStageUpdate[] = [...textStreams].flatMap(([id, text]) => {
+          const delta = text.slice(0, 800).trim();
+          return delta ? [{ stageId: `text:${id}`, delta, status: "complete" as const }] : [];
+        });
+        if (textStreams.size) {
+          // 持久化归类事件，在线展示和回放都清除临时正文，再归入工具前的阶段。
+          await appendRunEvent(chatRun.runId, "answer_to_stage", { stages });
+          yield { type: "answer-stage", data: { stages } };
+        }
+        textStreams.clear();
+      }
       if (part.type === "text-start") {
         textStreams.set(part.id, "");
       }
       if (part.type === "text-delta") {
         const stageId = `text:${part.id}`;
         const current = textStreams.get(part.id) ?? "";
-        const delta = part.text.slice(0, Math.max(0, 800 - current.length));
+        const delta = hasUsedTools
+          ? part.text.slice(0, Math.max(0, 800 - current.length))
+          : part.text;
         if (delta) {
           textStreams.set(part.id, current + delta);
-          yield createStageUpdate(stageId, delta, "active");
+          if (hasUsedTools) {
+            yield createStageUpdate(stageId, delta, "active");
+          } else {
+            pendingInitialText += delta;
+            if (Date.now() - lastInitialFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
+              await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
+              pendingInitialText = "";
+              lastInitialFlushAt = Date.now();
+            }
+            yield { type: "delta", data: { text: delta, provisional: true } };
+          }
         }
       }
-      if (part.type === "text-end") {
+      if (part.type === "text-end" && hasUsedTools) {
         const message = textStreams.get(part.id)?.trim() ?? "";
         textStreams.delete(part.id);
         if (message) {
@@ -227,6 +266,9 @@ export async function* executeChatRun(
         });
       }
       if (part.type === "tool-result") {
+        if (part.toolName === "search_notes" || part.toolName === "find_related") {
+          hasSearched = true;
+        }
         yield await createToolEvent(chatRun.runId, {
           toolCallId: part.toolCallId,
           toolName: part.toolName,
@@ -235,6 +277,7 @@ export async function* executeChatRun(
         });
       }
       if (part.type === "tool-error") {
+        hasToolError = true;
         yield await createToolEvent(chatRun.runId, {
           toolCallId: part.toolCallId,
           toolName: part.toolName,
@@ -245,21 +288,35 @@ export async function* executeChatRun(
       if (part.type === "error") throw part.error;
     }
 
-    const citations = state.getCitations();
-    if (!citations.length) {
-      throw new Error("Agent 未读取到可用于回答的知识库证据。");
+    if (!hasUsedTools) {
+      const answer = [...textStreams.values()].join("");
+      if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
+      // 正文已经逐增量发送，只保存尾部事件和完成状态，不再重发全文。
+      if (pendingInitialText) {
+        await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
+      }
+      await completeChatRun(chatRun, answer, []);
+      yield { type: "complete", data: { citations: [] } };
+      return;
     }
-    const sources = await readSnapshotSources(
-      chatRun.snapshotId,
-      citations.map((citation) => citation.chunkId),
-    );
+
+    const citations = state.getCitations();
+    if (!citations.length && hasToolError) {
+      throw new Error("知识库工具执行失败，未能取得可用证据，请稍后重试。");
+    }
+    const sources = citations.length
+      ? await readSnapshotSources(
+          chatRun.snapshotId,
+          citations.map((citation) => citation.chunkId),
+        )
+      : [];
     if (sources.length !== citations.length) {
       throw new Error("Agent 已读取的部分证据当前不可用。");
     }
 
     const finalResult = streamText({
       model: gateway(CHAT_MODEL),
-      system: buildFinalInstruction(sources, citations),
+      system: buildFinalInstruction(sources, citations, hasSearched),
       prompt: question,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       reasoning: "none",
@@ -363,11 +420,28 @@ async function getPartialBriefing(json: string) {
   return getPublicBriefing(value, false) ?? "";
 }
 
-/** 构造只允许依据 Agent 已读取证据作答的最终生成说明。 */
+/**
+ * 构造最终回答说明；普通交流允许无引用，知识库事实仍必须有已读取证据。
+ * @param sources 当前 Run 已读取且重新授权的来源。
+ * @param citations 与来源对应的引用编号。
+ * @param hasSearched 是否有搜索工具成功返回，避免虚构检索经历。
+ */
 function buildFinalInstruction(
   sources: Awaited<ReturnType<typeof readSnapshotSources>>,
   citations: ChatCitation[],
+  hasSearched: boolean,
 ) {
+  if (!sources.length) {
+    return [
+      "你是 VaultAgent，帮助用户了解和使用自己的知识库。请直接输出面向用户的最终回答。",
+      "本次没有已读取的知识库证据。问候、致谢和能力介绍正常简短回复，不需要引用，也不要向普通问候解释证据不足。",
+      "若问题需要知识库内容，明确说明目前没有取得支持答案的资料，不能用一般知识冒充用户文档内容，不编造文件、引用或执行结果。",
+      hasSearched
+        ? "本次已执行搜索，但未取得已读取的支持证据；这不代表知识库中绝对不存在相关内容。"
+        : "本次没有成功执行知识库搜索，不要声称已经查找或没有找到相关资料。",
+      "不输出私密推理、内部标识或错误堆栈。",
+    ].join("\n\n");
+  }
   const citationIds = new Map(
     citations.map((citation) => [citation.chunkId, citation.id]),
   );

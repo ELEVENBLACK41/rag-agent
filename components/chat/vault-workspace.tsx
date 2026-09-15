@@ -128,10 +128,14 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
         if (event === "tool") {
           updateToolActivity(assistantMessageId, data as ToolActivity);
         }
+        if (event === "answer-stage") {
+          moveAnswerToStages(assistantMessageId, (data as { stages: StageUpdate[] }).stages);
+        }
         if (event === "delta")
           appendAssistantText(
             assistantMessageId,
             (data as { text: string }).text,
+            (data as { provisional?: boolean }).provisional,
           );
         if (event === "complete") {
           updateAssistantCitations(
@@ -176,8 +180,12 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
         eventType: string;
         payload: Record<string, unknown>;
       };
-      if (replay.eventType === "final_delta")
+      if (replay.eventType === "final_delta" || replay.eventType === "provisional_delta")
         recoveredText += String(replay.payload.text ?? "");
+      if (replay.eventType === "answer_to_stage") {
+        recoveredText = "";
+        moveAnswerToStages(assistantMessageId, replay.payload.stages as StageUpdate[]);
+      }
       if (replay.eventType === "stage_message") {
         const message = String(
           replay.payload.message ?? "正在恢复任务状态。",
@@ -230,7 +238,7 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
   }
 
   /** 将服务端文本增量追加到对应的助手消息。 */
-  function appendAssistantText(messageId: string, text: string) {
+  function appendAssistantText(messageId: string, text: string, provisional = false) {
     setMessages((current) =>
       current.map((item) => {
         if (item.id !== messageId) return item;
@@ -239,12 +247,41 @@ export function VaultWorkspace({ canChat }: VaultWorkspaceProps) {
           ...item,
           content: item.content + text,
           process:
-            isFirstFinalDelta && item.process
+            isFirstFinalDelta && !provisional && item.process
               ? finishProcess(item.process, false)
               : item.process,
         };
       }),
     );
+  }
+
+  /**
+   * 首次工具调用后将临时正文归入执行过程；重复回放时按标识替换，避免重复阶段。
+   * @param messageId 当前助手消息标识。
+   * @param stages 服务端确认属于工具前说明的文本。
+   */
+  function moveAnswerToStages(messageId: string, stages: StageUpdate[]) {
+    setMessages((current) => current.map((item) => {
+      if (item.id !== messageId || !item.process) return item;
+      const stageIds = new Set(stages.map((stage) => stage.stageId));
+      const events: RunProcessEvent[] = stages.map((stage) => ({
+        id: stage.stageId,
+        kind: "stage",
+        message: stage.delta,
+        status: stage.status,
+      }));
+      return {
+        ...item,
+        content: "",
+        process: {
+          ...item.process,
+          status: "running",
+          completedAt: undefined,
+          open: true,
+          events: [...events, ...item.process.events.filter((event) => !stageIds.has(event.id))],
+        },
+      };
+    }));
   }
 
   /** 使用断线补齐的完整内容替换临时助手消息，防止内容重复。 */
