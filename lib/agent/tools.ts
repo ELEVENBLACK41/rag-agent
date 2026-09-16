@@ -14,6 +14,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { retrievePublishedChunksWithTrace } from "@/lib/retrieval/search";
 import { readSnapshotSources } from "@/lib/sources/reader";
+import { FILE_LIST_PAGE_SIZE, readFileInventory } from "@/lib/sources/file-inventory";
 import type { SourceCitation } from "@/lib/sources/types";
 import {
   MAX_READ_CHUNKS_PER_CALL,
@@ -24,6 +25,26 @@ import {
 /** 创建绑定当前 Run 状态的只读工具及证据收集结束工具。 */
 export function createVaultTools(state: VaultRunState) {
   return {
+    list_files: tool({
+      description: "列出当前已发布知识库快照的文件名、相对路径、格式和文件总数。回答有哪些文件、有多少文件时优先使用；仅列文件无需搜索或读取正文，不能凭文件名推断内容。总数以返回值为准，每页最多 30 个；用户要求完整清单且 nextOffset 非空时，在预算内继续翻页，未读全须说明仅列出部分。",
+      inputSchema: z.object({
+        briefing: z.string().trim().min(1).max(200)
+          .describe("公开阶段说明：准备查询文件清单或继续列取下一页，1 至 2 句"),
+        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - FILE_LIST_PAGE_SIZE)
+          .describe("分页起点，首次传 0；后续使用上次结果的 nextOffset"),
+      }),
+      strict: true,
+      execute: async ({ offset }) => {
+        if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
+        if (!state.snapshotId) return { status: "empty-vault", message: "当前尚无已发布资料。" };
+        const inventory = await readFileInventory(state.snapshotId, [offset]);
+        state.recordFileList(offset);
+        return {
+          status: "listed", ...inventory, offset,
+          nextOffset: offset + FILE_LIST_PAGE_SIZE < inventory.totalCount ? offset + FILE_LIST_PAGE_SIZE : null,
+        };
+      },
+    }),
     search_notes: tool({
       description: "在当前知识库快照中搜索与问题相关的内容候选。需要文档事实或证据时使用；问候、致谢无需调用，也不能用搜索结果代替完整文件清单。",
       inputSchema: z.object({
@@ -117,13 +138,14 @@ export function createVaultTools(state: VaultRunState) {
       description: "本次证据收集可以结束时调用，随后由独立生成器评估证据并回答。读取过资料并不代表资料足以回答问题；普通交流不要调用。",
       inputSchema: z.object({
         briefing: z.string().trim().min(1).max(200)
-          .describe("展示给用户的公开阶段结论：已确认了什么、仍缺少什么，1 至 2 句，不直接写完整答案"),
+          .describe("证据交接记录，1 至 2 句：只写原始问题已确认的范围及尚未解决的缺口；问题已解决就结束。不重复完整答案或文件清单，不建议额外查询，不写‘如需了解’、‘请提供’等邀请追问或服务收尾"),
       }),
       strict: true,
       execute: async () => {
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         return {
-          status: state.getCitationCount() ? "sources-read" : "no-sources-read",
+          status: state.getCitationCount() ? "sources-read"
+            : state.getFileListOffsets().length ? "file-metadata-read" : "no-sources-read",
           citationCount: state.getCitationCount(),
         };
       },

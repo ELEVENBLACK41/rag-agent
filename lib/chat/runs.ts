@@ -21,6 +21,7 @@ import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { ensureLocalPrincipal, LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
 import { getLatestPublishedSnapshot } from "@/lib/retrieval/search";
 import { readSnapshotSources } from "@/lib/sources/reader";
+import { readFileInventory } from "@/lib/sources/file-inventory";
 import type { SourceCitation } from "@/lib/sources/types";
 /** Agent 与最终回答共同使用的已验证主模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
@@ -166,7 +167,7 @@ export async function* executeChatRun(
       { json: string; briefing: string }
     >();
     const textStreams = new Map<string, string>();
-    /** 自由文本只作为待核验草稿；使用工具后不向浏览器发布草稿。 */
+    /** 公开文本同时作为待核验草稿；使用工具后的文本展示在执行过程区。 */
     const publicDraft = createPublicAnswerDraft();
     /** 首段实时展示；首次调用工具后清空临时正文，由工具 briefing 接续进度。 */
     let hasUsedTools = false;
@@ -186,23 +187,26 @@ export async function* executeChatRun(
           await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
           pendingInitialText = "";
         }
-        // 复用归类协议，空 stages 只清空正文；在线与回放都不再展示自由文本草稿。
+        // 空 stages 只清空工具调用前的临时正文；后续公开文本单独发布为阶段事件。
         await appendRunEvent(chatRun.runId, "answer_to_stage", { stages: [] });
         yield { type: "answer-stage", data: { stages: [] } };
         textStreams.clear();
       }
-      if (part.type === "text-start" && !hasUsedTools) {
+      if (part.type === "text-start") {
         textStreams.set(part.id, "");
       }
       if (part.type === "text-delta") {
         const stageId = `text:${part.id}`;
         publicDraft.append(stageId, "public-text", part.text);
-        // 必须在事件发布层隔离，不能仅依赖模型遵守“不要写完整答案”的指令。
-        if (hasUsedTools) continue;
         const current = textStreams.get(part.id) ?? "";
         const delta = part.text;
         if (delta) {
           textStreams.set(part.id, current + delta);
+          // 中间回答只进入执行过程，避免与最终正文拼接或提前折叠过程面板。
+          if (hasUsedTools) {
+            yield createStageUpdate(stageId, delta, "active");
+            continue;
+          }
           pendingInitialText += delta;
           if (Date.now() - lastInitialFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
             await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
@@ -211,6 +215,13 @@ export async function* executeChatRun(
           }
           yield { type: "delta", data: { text: delta, provisional: true } };
         }
+      }
+      if (part.type === "text-end" && hasUsedTools) {
+        const message = textStreams.get(part.id);
+        if (message?.trim()) {
+          yield await completeStage(chatRun.runId, `text:${part.id}`, message);
+        }
+        textStreams.delete(part.id);
       }
       if (part.type === "tool-input-start") {
         toolInputStreams.set(part.id, { json: "", briefing: "" });
@@ -296,7 +307,12 @@ export async function* executeChatRun(
     }
 
     const citations = state.getCitations();
-    if (!citations.length && hasToolError) {
+    /** 文件元数据是独立证据，不要求先读取正文；按成功查询过的页重新授权。 */
+    const fileListOffsets = state.getFileListOffsets();
+    const fileInventory = chatRun.snapshotId && fileListOffsets.length
+      ? await readFileInventory(chatRun.snapshotId, fileListOffsets)
+      : null;
+    if (!citations.length && !fileInventory && hasToolError) {
       throw new Error("知识库工具执行失败，未能取得可用证据，请稍后重试。");
     }
     const sources = citations.length && chatRun.snapshotId
@@ -308,12 +324,16 @@ export async function* executeChatRun(
     if (sources.length !== citations.length) {
       throw new Error("Agent 已读取的部分证据当前不可用。");
     }
+    if (fileInventory) {
+      await appendRunEvent(chatRun.runId, "file_inventory", fileInventory);
+    }
 
     const finalResult = streamText({
       model: gateway(CHAT_MODEL),
       system: buildFinalInstruction({
         sources, citations, hasSearched, hasToolError,
         publicDraft: publicDraft.getDraft(),
+        fileInventory,
       }),
       prompt: question,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -343,6 +363,13 @@ export async function* executeChatRun(
       await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
     }
     if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
+    // 生成期间可能删除文件；清单发生变化时不能把已过期内容保存为成功回答。
+    if (fileInventory && chatRun.snapshotId) {
+      const available = await readFileInventory(chatRun.snapshotId, fileListOffsets);
+      if (JSON.stringify(available) !== JSON.stringify(fileInventory)) {
+        throw new Error("回答期间知识库文件清单已变化，请重新提问。");
+      }
+    }
     const answerCitations = selectAnswerCitations(answer, citations);
     // 输出期间资料也可能被删除，发布前再次校验实际引用的来源。
     if (answerCitations.length && chatRun.snapshotId) {
@@ -495,6 +522,7 @@ function describeToolActivity(
   status: ChatToolActivity["status"],
 ) {
   const labels: Record<string, string> = {
+    list_files: "查询文件清单",
     search_notes: "搜索知识库",
     read_sources: "读取来源片段",
     find_related: "查找关联资料",

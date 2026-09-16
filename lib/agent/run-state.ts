@@ -31,9 +31,19 @@ export function createVaultRunState(snapshotId: string | null, options: VaultRun
   let toolCallCount = 0;
   /** 规范化搜索问题或关联来源，阻止相同操作重复访问检索服务。 */
   const searches = new Set<string>();
+  /** 只记录成功列取的页，最终回答按相同范围重新读取文件元数据。 */
+  const fileListOffsets = new Set<number>();
 
   return {
     snapshotId,
+    /** @param offset 已成功查询的文件列表起点，不把列表条目授权为正文片段。 */
+    recordFileList(offset: number) {
+      fileListOffsets.add(offset);
+    },
+    /** 返回已查询分页的副本，重复请求同一页不会增加证据范围。 */
+    getFileListOffsets() {
+      return [...fileListOffsets];
+    },
     /** 同步占用预算，阻止同一步并行工具突破上限；受控退出不冒充服务异常。 */
     beginToolCall() {
       if (toolCallCount >= MAX_AGENT_TOOL_CALLS)
