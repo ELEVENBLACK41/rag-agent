@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 各格式解析器共享输出与定位类型。
  *
  * 这里是解析层与索引、检索、引用展示之间的稳定契约。每种格式只声明能够
@@ -19,6 +19,15 @@ export type TextSourceLocator = {
   contentKind?: "paragraph" | "code";
   /** fenced code block 的语言标签，仅 contentKind 为 code 时可能存在。 */
   codeLanguage?: string;
+};
+
+/** Markdown 引用图片的模型描述，回溯到原笔记行号和快照内附件路径。 */
+export type MarkdownVisualSourceLocator = {
+  format: "markdown-visual";
+  attachmentFileVersionId: string;
+  attachmentPath: string;
+  lineNumber: number;
+  visualAssetId: string;
 };
 
 /** PDF 文本块固定绑定到原始 PDF 的物理页码。 */
@@ -71,6 +80,7 @@ export type XlsxVisualSourceLocator = {
 /** 统一的原文定位结构；不同格式通过 format 和专属字段表达位置。 */
 export type SourceLocator =
   | TextSourceLocator
+  | MarkdownVisualSourceLocator
   | PdfSourceLocator
   | PdfVisualSourceLocator
   | DocxSourceLocator
@@ -108,6 +118,21 @@ export type ParsedDocument = {
 export function toSourceLocator(value: unknown): SourceLocator | null {
   if (!value || typeof value !== "object") return null;
   const locator = value as Record<string, unknown>;
+  if (
+    locator.format === "markdown-visual" &&
+    typeof locator.attachmentFileVersionId === "string" &&
+    typeof locator.attachmentPath === "string" &&
+    typeof locator.lineNumber === "number" &&
+    typeof locator.visualAssetId === "string"
+  ) {
+    return {
+      format: "markdown-visual",
+      attachmentFileVersionId: locator.attachmentFileVersionId,
+      attachmentPath: locator.attachmentPath,
+      lineNumber: locator.lineNumber,
+      visualAssetId: locator.visualAssetId,
+    };
+  }
   if (locator.format === "pdf" && typeof locator.pageNumber === "number") {
     return { format: "pdf", pageNumber: locator.pageNumber };
   }

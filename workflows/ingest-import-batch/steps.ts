@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 导入批次的解析、视觉资产、Embedding 与发布步骤。
  *
  * 每个步骤只传递导入标识；正文、文件字节和模型上下文均在业务边界内读取，
@@ -25,6 +25,7 @@ import {
   publishImportBatch as publishBatch,
 } from "@/lib/ingestion/imports";
 import { replaceImportDiagnostics } from "@/lib/ingestion/import-diagnostics";
+import { analyzeInheritedMarkdownVisualImages } from "@/lib/ingestion/visual/markdown-image-analysis";
 import { analyzeImportVisualAssets } from "@/lib/ingestion/visual/registry";
 import { readStoredFile } from "@/lib/storage/files";
 
@@ -193,6 +194,15 @@ export async function analyzeIndexableImportVisualAssets(
 ) {
   "use step";
   return analyzeImportVisualAssets(importId, mediaType);
+}
+
+/**
+ * 图片附件独立更新时，为候选快照继承的 Markdown 生成对应的新视觉 Chunk。
+ * 返回需要补做 Embedding 的 Markdown 导入标识。
+ */
+export async function analyzeInheritedMarkdownAssets(batchId: string) {
+  "use step";
+  return analyzeInheritedMarkdownVisualImages(batchId);
 }
 
 /** 记录一个文件的具体失败，以便批次状态接口保留真实失败来源。 */

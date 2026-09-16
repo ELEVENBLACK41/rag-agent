@@ -173,6 +173,8 @@ function describeLocation(source: {
   endLine: number | null;
   sourceLocator: SourceCitation["sourceLocator"];
 }) {
+  if (source.sourceLocator?.format === "markdown-visual")
+    return `第 ${source.sourceLocator.lineNumber} 行 · 图片 ${source.sourceLocator.attachmentPath} · 视觉分析`;
   if (source.sourceLocator?.format === "pdf") return `第 ${source.sourceLocator.pageNumber} 页`;
   if (source.sourceLocator?.format === "pdf-visual") return `第 ${source.sourceLocator.pageNumber} 页 · 视觉分析`;
   if (source.sourceLocator?.format === "docx")

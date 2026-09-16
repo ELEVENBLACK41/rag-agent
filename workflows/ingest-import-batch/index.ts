@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 导入批次 Durable Workflow 编排入口。
  *
  * 编排层只决定可恢复步骤顺序与批次原子发布；格式细节、视觉资产与向量模型
@@ -12,6 +12,7 @@ import { getErrorMessage } from "@/lib/ingestion/errors";
 import {
   embedStoredChunks,
   analyzeIndexableImportVisualAssets,
+  analyzeInheritedMarkdownAssets,
   failIndexableImport,
   failImportBatch,
   listBatchIndexableImports,
@@ -66,7 +67,12 @@ export async function ingestImportBatchWorkflow(batchId: string) {
         await failIndexableImport(indexableImport.id, message);
         throw error;
       }
-    } 
+    }
+    /** 图片附件可以独立更新；为继承的 Markdown 补建新图片版本的视觉 Chunk。 */
+    const inheritedMarkdownImports =
+      await analyzeInheritedMarkdownAssets(batchId);
+    for (const importId of inheritedMarkdownImports)
+      embeddedChunkCount += await embedStoredChunks(importId);
     // 所有可索引文件都 ready后发布整个批次
     await publishImportBatch(batchId);
     return { embeddedChunkCount };

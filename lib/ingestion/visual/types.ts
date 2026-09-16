@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 跨格式视觉资产来源与分析结果类型。
  *
  * 来源键与来源定位属于原始文件版本，模型结果只是其派生数据。新的格式只需
@@ -11,7 +11,12 @@
 /** 派生视觉资产在父文件中的可复现位置。 */
 export type VisualSourceLocator =
   | { kind: "pdf-page"; pageNumber: number }
-  | { kind: "markdown-image"; sourcePath: string; lineNumber?: number }
+  | {
+      kind: "markdown-image";
+      attachmentFileVersionId: string;
+      sourcePath: string;
+      lineNumber?: number;
+    }
   | { kind: "document-image"; imageIndex: number }
   | {
       kind: "worksheet-image";
@@ -33,7 +38,7 @@ export function createVisualSourceKey(locator: VisualSourceLocator) {
     case "pdf-page":
       return `pdf-page:${locator.pageNumber}`;
     case "markdown-image":
-      return `markdown-image:${locator.sourcePath}:${locator.lineNumber ?? 0}`;
+      return `markdown-image:${locator.attachmentFileVersionId}:${locator.sourcePath}:${locator.lineNumber ?? 0}`;
     case "document-image":
       return `document-image:${locator.imageIndex}`;
     case "worksheet-image":

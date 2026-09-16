@@ -7,11 +7,13 @@
  * edit by：Sliye
  */
 
-import path from "node:path";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { fileVersions, indexSnapshotFiles, logicalFiles } from "@/lib/db/schema";
-import { normalizeVaultPath } from "@/lib/ingestion/source-path";
+import {
+  normalizeMarkdownAttachmentTarget,
+  resolveMarkdownAttachmentPath,
+} from "@/lib/ingestion/markdown-attachment-path";
 import { readStoredFile } from "@/lib/storage/files";
 import { getRunSourceRecord } from "@/lib/sources/reader";
 
@@ -50,11 +52,15 @@ export async function readRunMarkdownAttachment(
     !source.snapshotId
   ) return { kind: "not-found" };
 
-  const normalizedTarget = normalizeAttachmentTarget(target);
+  const normalizedTarget = normalizeMarkdownAttachmentTarget(target);
   if (!normalizedTarget) return { kind: "invalid" };
 
   const candidates = await getSnapshotImageCandidates(source.snapshotId);
-  const resolved = resolveAttachmentPath(source.sourcePath, normalizedTarget, candidates);
+  const resolved = resolveMarkdownAttachmentPath(
+    source.sourcePath,
+    normalizedTarget,
+    candidates,
+  );
   if (resolved === "ambiguous") return { kind: "ambiguous" };
   if (!resolved) return { kind: "not-found" };
 
@@ -80,39 +86,4 @@ async function getSnapshotImageCandidates(snapshotId: string): Promise<Attachmen
         isNull(logicalFiles.deletedAt),
       ),
     );
-}
-
-/** 拒绝协议、绝对路径、越界和重复解码后的伪路径；调用方不得再次 decode。 */
-function normalizeAttachmentTarget(value: string) {
-  const target = value.trim().replace(/^<|>$/g, "").split("|")[0].split("#")[0].trim();
-  if (!target || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) return null;
-  try {
-    return normalizeVaultPath(target);
-  } catch {
-    return null;
-  }
-}
-
-/** 优先当前笔记目录、再 Vault 根目录，最后只允许全 Vault 唯一的短文件名。 */
-function resolveAttachmentPath(
-  sourcePath: string,
-  target: string,
-  candidates: AttachmentCandidate[],
-) {
-  const parentDirectory = path.posix.dirname(sourcePath);
-  const relativePath = normalizeVaultPath(
-    parentDirectory === "." ? target : `${parentDirectory}/${target}`,
-  );
-  const relativeMatch = candidates.find((candidate) => candidate.sourcePath === relativePath);
-  if (relativeMatch) return relativeMatch;
-
-  const rootMatch = candidates.find((candidate) => candidate.sourcePath === target);
-  if (rootMatch) return rootMatch;
-
-  if (target.includes("/")) return null;
-  const shortNameMatches = candidates.filter(
-    (candidate) => candidate.sourcePath && path.posix.basename(candidate.sourcePath) === target,
-  );
-  if (shortNameMatches.length === 1) return shortNameMatches[0];
-  return shortNameMatches.length > 1 ? "ambiguous" : null;
 }

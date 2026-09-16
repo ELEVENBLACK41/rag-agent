@@ -134,6 +134,8 @@ export function ChatMessageList({
 
 /** 将不同格式的来源定位转为聊天引用标签，历史行号引用继续可读。 */
 function getCitationLocation(citation: Citation) {
+  if (citation.sourceLocator?.format === "markdown-visual")
+    return `第 ${citation.sourceLocator.lineNumber} 行 · 图片 ${citation.sourceLocator.attachmentPath} · 视觉分析`;
   if (
     citation.sourceLocator?.format === "pdf" &&
     citation.sourceLocator.pageNumber

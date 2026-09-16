@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-13
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 可索引文档的受限视觉分析器注册表。
  *
  * Workflow 只传入已经校验的 MIME 类型和导入标识；每种格式自行负责选择视觉
@@ -9,6 +9,7 @@
  */
 
 import { analyzeDocxVisualImages } from "@/lib/ingestion/visual/docx-image-analysis";
+import { analyzeMarkdownVisualImages } from "@/lib/ingestion/visual/markdown-image-analysis";
 import { analyzePdfVisualPages } from "@/lib/ingestion/visual/pdf-page-analysis";
 import { analyzeXlsxVisualImages } from "@/lib/ingestion/visual/xlsx-image-analysis";
 
@@ -16,6 +17,7 @@ type VisualAssetAnalyzer = (importId: string) => Promise<number>;
 
 /** 已实现受限视觉候选处理的可索引文件类型。 */
 const VISUAL_ASSET_ANALYZERS: Record<string, VisualAssetAnalyzer> = {
+  "text/markdown": analyzeMarkdownVisualImages,
   "application/pdf": analyzePdfVisualPages,
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": analyzeDocxVisualImages,
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": analyzeXlsxVisualImages,

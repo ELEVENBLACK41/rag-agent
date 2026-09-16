@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 固定 Run 快照下的来源读取与原文件访问授权。
  *
  * 所有来源读取都从 Run、快照、Chunk 和文件版本重新建立关系。调用方只能得到
@@ -8,7 +8,7 @@
  * edit by：Sliye
  */
 
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import {
   chunks,
@@ -60,6 +60,21 @@ export async function readSnapshotSources(
         inArray(chunks.id, chunkIds),
         eq(fileVersions.status, "indexed"),
         isNull(logicalFiles.deletedAt),
+        sql`(
+          coalesce(${chunks.sourceLocator}->>'format', '') <> 'markdown-visual'
+          or exists (
+            select 1
+            from index_snapshot_files as markdown_image_files
+            inner join file_versions as markdown_image_versions
+              on markdown_image_versions.id = markdown_image_files.file_version_id
+            inner join logical_files as markdown_image_logical_files
+              on markdown_image_logical_files.id = markdown_image_versions.logical_file_id
+            where markdown_image_files.snapshot_id = ${snapshotId}
+              and markdown_image_files.file_version_id = ${chunks.sourceLocator}->>'attachmentFileVersionId'
+              and markdown_image_versions.status in ('stored', 'indexed')
+              and markdown_image_logical_files.deleted_at is null
+          )
+        )`,
       ),
     );
 
@@ -117,6 +132,21 @@ export async function getRunSourceRecord(runId: string, chunkId: string) {
         eq(chunks.id, chunkId),
         eq(fileVersions.status, "indexed"),
         isNull(logicalFiles.deletedAt),
+        sql`(
+          coalesce(${chunks.sourceLocator}->>'format', '') <> 'markdown-visual'
+          or exists (
+            select 1
+            from index_snapshot_files as markdown_image_files
+            inner join file_versions as markdown_image_versions
+              on markdown_image_versions.id = markdown_image_files.file_version_id
+            inner join logical_files as markdown_image_logical_files
+              on markdown_image_logical_files.id = markdown_image_versions.logical_file_id
+            where markdown_image_files.snapshot_id = ${runs.snapshotId}
+              and markdown_image_files.file_version_id = ${chunks.sourceLocator}->>'attachmentFileVersionId'
+              and markdown_image_versions.status in ('stored', 'indexed')
+              and markdown_image_logical_files.deleted_at is null
+          )
+        )`,
       ),
     )
     .limit(1);
@@ -143,7 +173,8 @@ export async function readRunVisualAsset(runId: string, chunkId: string) {
   const locator = toSourceLocator(record.sourceLocator);
   if (
     !locator ||
-    (locator.format !== "pdf-visual" &&
+    (locator.format !== "markdown-visual" &&
+      locator.format !== "pdf-visual" &&
       locator.format !== "docx-visual" &&
       locator.format !== "xlsx-visual")
   ) return null;

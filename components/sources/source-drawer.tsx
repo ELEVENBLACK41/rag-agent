@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent D9 右侧来源抽屉。
  *
  * 抽屉只按已保存的 Run 与引用 Chunk 请求服务端来源接口。解析文本、PDF 原文件和
@@ -147,6 +147,8 @@ function LoadingSource() {
 
 /** 将引用定位转换为人可读标题。 */
 function describeCitationLocation(citation: SourceCitation) {
+  if (citation.sourceLocator?.format === "markdown-visual")
+    return `第 ${citation.sourceLocator.lineNumber} 行 · 图片 ${citation.sourceLocator.attachmentPath} · 视觉分析`;
   if (citation.sourceLocator?.format === "pdf") return `第 ${citation.sourceLocator.pageNumber} 页`;
   if (citation.sourceLocator?.format === "pdf-visual") return `第 ${citation.sourceLocator.pageNumber} 页 · 视觉分析`;
   if (citation.sourceLocator?.format === "docx") return citation.sourceLocator.blockType === "table" ? `表格 ${citation.sourceLocator.tableIndex ?? citation.sourceLocator.blockIndex}` : `段落 ${citation.sourceLocator.blockIndex}`;

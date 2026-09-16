@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 跨格式派生图片的保存、结构化分析与视觉 Chunk 写入。
  *
  * PDF、DOCX 和 XLSX 都只负责找出受限图片与其原始位置；本模块统一负责
@@ -28,7 +28,7 @@ import {
   writeStoredFile,
 } from "@/lib/storage/files";
 
-type SupportedVisualMediaType = "image/png" | "image/jpeg";
+export type SupportedVisualMediaType = "image/png" | "image/jpeg";
 
 export type StoredImageAnalysisInput = {
   importId: string;
@@ -41,6 +41,8 @@ export type StoredImageAnalysisInput = {
   mediaType: SupportedVisualMediaType;
   chunkLocator: (assetId: string) => SourceLocator;
   chunkLabel: string;
+  /** 视觉 Chunk 在父文本文件中的可复现起止行；Office/PDF 保持为空。 */
+  chunkLineRange?: { startLine: number; endLine: number };
 };
 
 /**
@@ -100,7 +102,7 @@ export async function analyzeAndStoreImage(input: StoredImageAnalysisInput) {
 async function storeCompletedVisualAnalysis(
   input: StoredImageAnalysisInput & { assetId: string; analysis: VisualAnalysis },
 ) {
-  const content = `${input.chunkLabel}\n${input.analysis.description}\n可见文字：${input.analysis.visibleText}`;
+  const content = `${input.chunkLabel}\n${input.analysis.description}\n可见文字：${input.analysis.visibleText}\n视觉置信度：${input.analysis.confidence}`;
   await getDatabase().transaction(async (transaction) => {
     const [lastChunk] = await transaction
       .select({ ordinal: chunks.ordinal })
@@ -123,15 +125,15 @@ async function storeCompletedVisualAnalysis(
       ordinal: (lastChunk?.ordinal ?? -1) + 1,
       content,
       contentHash: createHash("sha256").update(content).digest("hex"),
-      startLine: null,
-      endLine: null,
+      startLine: input.chunkLineRange?.startLine ?? null,
+      endLine: input.chunkLineRange?.endLine ?? null,
       sourceLocator: input.chunkLocator(input.assetId),
     });
   });
 }
 
 /** 读取 PNG/JPEG 的像素尺寸；不支持或损坏的图像在模型调用前明确拒绝。 */
-function readImageDimensions(
+export function readImageDimensions(
   image: Uint8Array,
   mediaType: SupportedVisualMediaType,
 ) {

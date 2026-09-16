@@ -353,6 +353,21 @@ function publishedChunkScope(
     inArray(fileVersions.id, activeFileVersionIds),
     eq(fileVersions.status, "indexed"),
     isNull(logicalFiles.deletedAt),
+    sql`(
+      coalesce(${chunks.sourceLocator}->>'format', '') <> 'markdown-visual'
+      or exists (
+        select 1
+        from index_snapshot_files as markdown_image_files
+        inner join file_versions as markdown_image_versions
+          on markdown_image_versions.id = markdown_image_files.file_version_id
+        inner join logical_files as markdown_image_logical_files
+          on markdown_image_logical_files.id = markdown_image_versions.logical_file_id
+        where markdown_image_files.snapshot_id = ${snapshotId}
+          and markdown_image_files.file_version_id = ${chunks.sourceLocator}->>'attachmentFileVersionId'
+          and markdown_image_versions.status in ('stored', 'indexed')
+          and markdown_image_logical_files.deleted_at is null
+      )
+    )`,
     extraWhere,
   );
 }
