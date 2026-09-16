@@ -11,6 +11,7 @@
  */
 
 import { MAX_SOURCE_CHARACTERS } from "@/lib/agent/run-state";
+import { isDisplayableImageCitation } from "@/lib/chat/citations";
 import type { ReadableSource, SourceCitation } from "@/lib/sources/types";
 import type { PublicAnswerDraft } from "@/lib/chat/public-draft";
 import type { FileInventory } from "@/lib/sources/file-inventory";
@@ -21,6 +22,10 @@ import { describeConversationContext } from "@/lib/chat/conversation-context";
 export const finalAnswerSchema = z.object({
   answer: z.string().min(1).describe("面向用户的 Markdown 正文，不含引用编号、来源标记或末尾来源清单"),
   citationIds: z.array(z.number().int().positive()).describe("仅填写正文实际使用的 sources.citationId；无正文来源或仅回答文件清单时为空数组"),
+  imageCitationIds: z
+    .array(z.number().int().positive())
+    .max(4)
+    .describe("用户明确要求查找或展示图片时，填写最多 4 个 canDisplayImage=true 的来源编号；否则为空数组"),
 });
 
 /** 最终生成需要的证据与执行事实，避免把工具失败描述为检索无结果。 */
@@ -46,10 +51,10 @@ export function buildFinalInstruction(context: FinalAnswerContext) {
   const citationIds = new Map(citations.map((citation) => [citation.chunkId, citation.id]));
   /** 来源以独立字段返回；没有正文来源时不能为元数据或草稿编造来源。 */
   const citationInstructions = sources.length
-    ? "citationIds 只填写 answer 实际使用的正文来源的数字 citationId，不要把所有读取过的来源都列入。文件名、字段名、publicDraft 和 fileInventory 不能作为来源编号。来源卡片由界面单独展示，answer 内不写引用编号、引用标记或来源列表。"
-    : "本轮没有可引用的正文来源，citationIds 必须为空数组。文件清单中的名称、格式、数量和空清单结论可直接回答；缺少正文证据时如实说明，不编造文件内容。answer 内不写引用编号、引用标记或来源列表。";
+    ? "citationIds 只填写 answer 实际使用的正文来源的数字 citationId，不要把所有读取过的来源都列入。文件名、字段名、publicDraft 和 fileInventory 不能作为来源编号。用户明确要求查找、给出或展示知识库图片时，从实际匹配且 canDisplayImage=true 的来源中选择最多 4 个 imageCitationIds，并在 answer 中说明图片展示在下方；这些编号也应作为回答来源。存在可展示图片时不得声称受工具限制无法展示，即使 publicDraft 曾这样声称也必须纠正。用户没有要求展示图片时 imageCitationIds 必须为空。来源卡片和图片由界面单独展示，answer 严禁写 Markdown 图片、HTML img、图片 URL、引用编号、引用标记或来源列表，也不得编造 CDN 地址。"
+    : "本轮没有可引用的正文来源，citationIds 和 imageCitationIds 必须为空数组。文件清单中的名称、格式、数量和空清单结论可直接回答；缺少正文证据时如实说明，不编造文件内容。answer 内不写引用编号、图片 URL、引用标记或来源列表。";
   return [
-    "你是 VaultAgent，按输出 Schema 返回 answer 和 citationIds 两个字段。先生成 answer 正文，再给出独立来源列表；answer 是面向用户的最终回答。",
+    "你是 VaultAgent，按输出 Schema 返回 answer、citationIds 和 imageCitationIds 三个字段。先生成 answer 正文，再给出独立来源与图片选择；answer 是面向用户的最终回答。",
     describeConversationContext(context.historyTruncated),
     "问候、致谢、能力介绍以及未涉及个人资料的普通知识允许直接回答；涉及用户知识库的事实只能依据以下已读取正文证据或文件清单元数据。",
     "fileInventory 是服务端重新查询的当前快照文件元数据，只支持文件名、相对路径、格式和总数，不证明正文内容；文件清单不是正文引用来源，不为它生成引用标记。同名文件使用相对路径区分，不自行合并。",
@@ -73,6 +78,8 @@ export function buildFinalInstruction(context: FinalAnswerContext) {
       sources: sources.map((source) => ({
         citationId: citationIds.get(source.chunkId),
         title: source.displayName,
+        sourceKind: isDisplayableImageCitation(source) ? "visual" : "text",
+        canDisplayImage: isDisplayableImageCitation(source),
         // 与 Agent 实际读取长度保持一致，最终生成不能借机扩张证据范围。
         content: source.content.slice(0, MAX_SOURCE_CHARACTERS),
       })),

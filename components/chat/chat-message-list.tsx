@@ -12,8 +12,9 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import { RunProcess } from "@/components/chat/run-process";
+import { MessageImageGallery } from "@/components/chat/message-image-gallery";
 import { Button } from "@/components/ui/button";
-import { FileTextIcon } from "lucide-react";
+import { FileTextIcon, ImageIcon } from "lucide-react";
 import type { ChatMessage } from "@/lib/chat/types";
 import type { SourceCitation as Citation } from "@/lib/sources/types";
 
@@ -26,6 +27,9 @@ type ChatMessageListProps = {
   onProcessOpen: (id: string, open: boolean) => void;
   onCitation: (message: ChatMessage, citation: Citation) => void;
 };
+
+/** 模型正文不负责图片授权；所有 Markdown/HTML 图片都交给受控画廊展示。 */
+const CHAT_MARKDOWN_COMPONENTS = { img: () => null };
 
 /** 只组合展示与交互回调，不负责请求或历史上下文。 */
 export function ChatMessageList({
@@ -72,6 +76,7 @@ export function ChatMessageList({
                 <MessageContent className="text-base leading-7 group-[.is-user]:max-w-[85%] group-[.is-user]:whitespace-pre-wrap group-[.is-user]:rounded-3xl group-[.is-user]:bg-chat-user group-[.is-user]:px-5 group-[.is-user]:py-2.5 group-[.is-user]:text-chat-user-foreground group-[.is-assistant]:w-full">
                   {message.role === "assistant" ? (
                     <MessageResponse
+                      components={CHAT_MARKDOWN_COMPONENTS}
                       className="chat-response"
                       isAnimating={
                         streaming && message.id === messages.at(-1)?.id
@@ -96,6 +101,14 @@ export function ChatMessageList({
                   {message.error}
                 </p>
               )}
+              {message.role === "assistant" && message.runId &&
+                !!message.citations?.some((citation) => citation.displayImage) && (
+                  <MessageImageGallery
+                    citations={message.citations}
+                    onCitation={(citation) => onCitation(message, citation)}
+                    runId={message.runId}
+                  />
+                )}
               {message.role === "assistant" && message.runId && message.process?.completedAt &&
                 ["failed", "cancelled"].includes(message.process.status) && (
                 <Button variant="outline" size="sm" disabled={streaming} onClick={() => onRetry(message.runId!)}>
@@ -117,7 +130,11 @@ export function ChatMessageList({
                       type="button"
                       variant="outline"
                     >
-                      <FileTextIcon className="size-3" />
+                      {citation.displayImage ? (
+                        <ImageIcon className="size-3" />
+                      ) : (
+                        <FileTextIcon className="size-3" />
+                      )}
                       <span className="min-w-0 truncate">{citation.displayName} · {getCitationLocation(citation)}</span>
                     </Button>
                   ))}

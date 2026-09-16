@@ -4,8 +4,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
-import type { ChatRun } from "@/lib/chat/types";
-import type { SourceCitation } from "@/lib/sources/types";
+import type { AnswerCitation, ChatRun } from "@/lib/chat/types";
 import { RUN_DEADLINE_MS, RUN_EVENT_CHANNEL } from "@/lib/chat/config";
 
 /** 复用 Drizzle 的事务类型，不为持久层引入另一套接口。 */
@@ -84,7 +83,7 @@ export async function appendRunEvent(
 export async function completeChatRun(
   chatRun: ChatRun,
   answer: string,
-  citations: SourceCitation[],
+  citations: AnswerCitation[],
 ) {
   const completed = await withLockedRun(chatRun.runId, async (tx, run) => {
     if (run.status !== "running") return false;

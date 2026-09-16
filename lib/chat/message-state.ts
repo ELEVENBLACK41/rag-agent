@@ -1,13 +1,13 @@
 /** 修改时间：2026-09-16 | 文件说明：实时聊天与历史回放共用的纯消息状态转换 | edit by：Sliye */
 import type {
   ChatMessage,
+  AnswerCitation,
   ChatStageUpdate,
   ChatStreamEvent,
   ChatToolActivity,
   RunProcessState,
   StoredRunEvent,
 } from "@/lib/chat/types";
-import type { SourceCitation } from "@/lib/sources/types";
 
 /** @param id 助手消息 ID。 @param startedAt 本轮真实开始时间，毫秒。 */
 export function createAssistantMessage(
@@ -71,6 +71,8 @@ export function applyChatEvent(
             ? { ...process, open: false }
             : process,
       };
+    case "replace-answer":
+      return { ...message, content: event.data.text };
     case "stage":
       return { ...message, process: updateStage(process, event.data) };
     case "tool": {
@@ -184,7 +186,7 @@ export function replayMessageEvent(
     case "run_completed":
       event = {
         type: "complete",
-        data: { citations: payload.citations as SourceCitation[] },
+        data: { citations: payload.citations as AnswerCitation[] },
       };
       break;
     case "run_failed":

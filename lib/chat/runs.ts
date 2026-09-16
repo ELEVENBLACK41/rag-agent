@@ -13,6 +13,7 @@ import {
   finalAnswerSchema,
 } from "@/lib/chat/final-answer";
 import { createPublicAnswerDraft } from "@/lib/chat/public-draft";
+import { removeUntrustedImageMarkup } from "@/lib/chat/answer-content";
 import { loadConversationContext } from "@/lib/chat/conversation-context";
 import {
   appendRunEvent,
@@ -270,7 +271,12 @@ export async function* executeChatRun(
     answer = output.answer;
     yield { type: "delta", data: { text: remaining } };
   }
-  if (!answer.trim()) throw new ChatExecutionError("模型没有返回可保存的回答。");
+  const safeAnswer = removeUntrustedImageMarkup(answer);
+  if (!safeAnswer) throw new ChatExecutionError("模型没有返回可保存的回答。");
+  if (safeAnswer !== answer) {
+    answer = safeAnswer;
+    yield { type: "replace-answer", data: { text: answer } };
+  }
   // 生成期间可能删除文件；清单发生变化时不能把已过期内容保存为成功回答。
   if (fileInventory && chatRun.snapshotId) {
     const available = await readFileInventory(
@@ -283,6 +289,7 @@ export async function* executeChatRun(
   }
   const answerCitations = selectAnswerCitations(
     output.citationIds,
+    output.imageCitationIds,
     citations,
   );
   // 输出期间资料也可能被删除，发布前再次校验实际引用的来源。

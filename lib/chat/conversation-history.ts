@@ -9,11 +9,11 @@ import {
   replayMessageEvent,
 } from "@/lib/chat/message-state";
 import type {
+  AnswerCitation,
   ChatMessage,
   ConversationHistory,
   StoredRunEvent,
 } from "@/lib/chat/types";
-import type { SourceCitation } from "@/lib/sources/types";
 
 /** 每页最多 20 轮，用户可以继续加载更早的完整问答。 */
 const HISTORY_PAGE_SIZE = 20;
@@ -118,7 +118,7 @@ export async function getConversationHistory(
       assistant = {
         ...assistant,
         content: final.content,
-        citations: final.citations as SourceCitation[],
+        citations: final.citations as AnswerCitation[],
         process: {
           ...assistant.process!,
           status: "completed",

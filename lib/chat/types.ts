@@ -9,6 +9,11 @@
 /** 修改时间：2026-09-16 | 文件说明：聊天事件、历史消息与会话列表的共享契约 | edit by：Sliye */
 import type { SourceCitation } from "@/lib/sources/types";
 
+/** 最终回答中的来源；displayImage 只表示本轮经模型选择并由服务端验证后的展示意图。 */
+export type AnswerCitation = SourceCitation & {
+  displayImage?: true;
+};
+
 export type ChatRun = {
   conversationId: string;
   runId: string;
@@ -31,8 +36,9 @@ export type ChatStreamEvent =
   | { type: "stage"; data: ChatStageUpdate }
   | { type: "tool"; data: ChatToolActivity }
   | { type: "delta"; data: { text: string; provisional?: boolean } }
+  | { type: "replace-answer"; data: { text: string } }
   | { type: "answer-stage"; data: { stages: ChatStageUpdate[] } }
-  | { type: "complete"; data: { citations: SourceCitation[] } }
+  | { type: "complete"; data: { citations: AnswerCitation[] } }
   | { type: "cancelled"; data: { message: string } }
   | { type: "error"; data: { message: string } };
 export type RunProcessEvent =
@@ -60,7 +66,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   runId?: string;
-  citations?: SourceCitation[];
+  citations?: AnswerCitation[];
   /** 已应用的持久事件游标，用于历史恢复后的精确补齐。 */
   lastSequence?: number;
   process?: RunProcessState;
