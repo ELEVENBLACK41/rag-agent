@@ -69,6 +69,7 @@ export function MarkdownSourceViewer({
   useEffect(() => {
     if (!content || !contentRef.current || highlight?.kind !== "line-range")
       return;
+    const root = contentRef.current;
     //根据行号找一段文本
     const quote = findLineQuote(
       content,
@@ -76,11 +77,40 @@ export function MarkdownSourceViewer({
       highlight.endLine,
     );
     if (!quote) return;
+    let marker: HTMLElement | null = null;
+    const imageCleanups: Array<() => void> = [];
+    let correctionFrame: number | null = null;
+
+    /** 图片完成布局后在下一帧校正来源位置。 */
+    const correctScrollAfterImage = () => {
+      if (correctionFrame !== null) cancelAnimationFrame(correctionFrame);
+      correctionFrame = requestAnimationFrame(() => {
+        correctionFrame = null;
+        if (marker?.isConnected) scrollToSourceHighlight(marker);
+      });
+    };
     // 等待 Markdown DOM 完成渲染
-    const frame = requestAnimationFrame(() =>
-      highlightRenderedQuote(contentRef.current!, quote),
-    );
-    return () => cancelAnimationFrame(frame);
+    const frame = requestAnimationFrame(() => {
+      marker = highlightRenderedQuote(root, quote);
+      if (!marker) return;
+      scrollToSourceHighlight(marker);
+
+      for (const image of findImagesBeforeHighlight(root, marker)) {
+        if (image.complete) continue;
+        image.addEventListener("load", correctScrollAfterImage, { once: true });
+        image.addEventListener("error", correctScrollAfterImage, { once: true });
+        imageCleanups.push(() => {
+          image.removeEventListener("load", correctScrollAfterImage);
+          image.removeEventListener("error", correctScrollAfterImage);
+        });
+      }
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (correctionFrame !== null) cancelAnimationFrame(correctionFrame);
+      for (const cleanup of imageCleanups) cleanup();
+      if (marker?.isConnected) marker.replaceWith(...marker.childNodes);
+    };
   }, [content, highlight]);
 
   if (status === "loading" || status === "idle") return <SourceFileLoading />;
@@ -241,14 +271,25 @@ function findLineQuote(markdown: string, startLine: number, endLine: number) {
 /** 跨渲染 Text Node 查找首个引用并以临时 mark 包裹，无法定位时不伪造成功。 */
 function highlightRenderedQuote(root: HTMLElement, quote: string) {
   const range = findTextRange(root, quote);
-  if (!range) return;
+  if (!range) return null;
   const marker = document.createElement("mark");
   marker.dataset.vaultagentSourceHighlight = "true";
   marker.className = "bg-source-highlight rounded-sm px-0.5 text-foreground";
   marker.append(range.extractContents());
   range.insertNode(marker);
-  // 滚动居中 主要是滚动到mark上
+  return marker;
+}
+
+/** 将来源高亮放在当前滚动视口中部。 */
+function scrollToSourceHighlight(marker: HTMLElement) {
   marker.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/** 只监听高亮之前的图片；下方图片尺寸变化不会推移当前来源。 */
+function findImagesBeforeHighlight(root: HTMLElement, marker: HTMLElement) {
+  return Array.from(root.querySelectorAll("img")).filter((image) =>
+    Boolean(image.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING),
+  );
 }
 
 /** 构造一个允许跨内联 Text Node 的精确 DOM Range。 */

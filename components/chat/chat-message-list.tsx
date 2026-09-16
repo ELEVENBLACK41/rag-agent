@@ -101,11 +101,11 @@ export function ChatMessageList({
                   {message.error}
                 </p>
               )}
+              {/* 图片渲染会话中 */}
               {message.role === "assistant" && message.runId &&
                 !!message.citations?.some((citation) => citation.displayImage) && (
                   <MessageImageGallery
                     citations={message.citations}
-                    onCitation={(citation) => onCitation(message, citation)}
                     runId={message.runId}
                   />
                 )}
