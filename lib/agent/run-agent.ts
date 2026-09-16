@@ -25,8 +25,8 @@ export const MAX_AGENT_OUTPUT_TOKENS = 1_200;
 /** D1 已真实验证的主问答模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
 
-/** @param state 本轮快照与工具预算。 @param historyTruncated 较早对话是否因预算省略。 */
-export function createVaultRunAgent(state: VaultRunState, historyTruncated: boolean) {
+/** @param state 本轮快照与工具预算。 @param historyTruncated 较早对话是否因预算省略。 @param assertActive 工具入口的持久执行门禁。 */
+export function createVaultRunAgent(state: VaultRunState, historyTruncated: boolean, assertActive: () => Promise<void>) {
   /** 两个阶段共用的行为与证据边界，切换职责时始终保留
    * 始终生效得基础规则 
    */
@@ -62,8 +62,9 @@ export function createVaultRunAgent(state: VaultRunState, historyTruncated: bool
   return new ToolLoopAgent({
     model: gateway(CHAT_MODEL),
     instructions: initialInstructions,
-    tools: createVaultTools(state),//完成得工具集合
+    tools: createVaultTools(state, assertActive),//完成得工具集合,这个函数主要是为了在手动终止任务的时候不要调用工具了,查询一下任务是否还在允许运行
     stopWhen: [hasToolCall("finish_research"), stepCountIs(MAX_AGENT_STEPS), () => state.isToolBudgetExhausted()], //什么时候停止 就是调用了finish_research，达到了最大步骤数，或者是工具预算耗尽
+    maxRetries: 0,
     maxOutputTokens: MAX_AGENT_OUTPUT_TOKENS,
     reasoning: "none",
     // 官方：https://ai-sdk.dev/docs/agents/loop-control；初始步骤按需调用，收集阶段通过工具交接结束。

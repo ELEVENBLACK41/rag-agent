@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：聊天输入、提交与停止接收按钮 | edit by：Sliye */
+/** 修改时间：2026-09-16 | 文件说明：聊天输入、提交与停止生成按钮 | edit by：Sliye */
 "use client";
 import {
   PromptInput,
@@ -36,7 +36,7 @@ export function ChatComposer({
             placeholder="问问你的资料，或继续追问…"
           />
           <PromptInputSubmit
-            aria-label={streaming ? "停止接收" : "发送消息"}
+            aria-label={streaming ? "停止生成" : "发送消息"}
             disabled={!streaming && (disabled || !value.trim())}
             onStop={onStop}
             status={streaming ? "streaming" : "ready"}

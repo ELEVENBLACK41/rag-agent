@@ -2,12 +2,12 @@
  * @Author: shaoliye shaoliye@fengmap.com
  * @Date: 2026-09-16 11:46:16
  * @LastEditors: shaoliye shaoliye@fengmap.com
- * @LastEditTime: 2026-09-16 13:42:22
+ * @LastEditTime: 2026-09-16 15:13:38
  * @FilePath: \rag-agent\components\chat\chat-client.ts
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
 /** 修改时间：2026-09-16 | 文件说明：聊天客户端的 JSON 请求与 SSE 帧读取 | edit by：Sliye */
-import type { ChatStreamEvent, ConversationHistory } from "@/lib/chat/types";
+import type { ConversationHistory, StoredRunEvent } from "@/lib/chat/types";
 
 /** @param response 同源 API 响应。失败时使用服务端公开错误，不伪造空列表。 */
 export async function readChatJson<T>(response: Response): Promise<T> {
@@ -37,7 +37,7 @@ export async function fetchConversation(
 /** @param stream API 的 SSE 响应体。 @param onEvent 每个完整公开事件的消费者。 */
 export async function consumeChatStream(
   stream: ReadableStream<Uint8Array>,
-  onEvent: (event: ChatStreamEvent) => void,
+  onEvent: (event: StoredRunEvent) => void,
 ) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -45,25 +45,16 @@ export async function consumeChatStream(
   /** SSE 帧只在完整 JSON 数据到达后解析，支持网络分片和 CRLF。 */
   const dispatch = (frame: string) => {
     const type = frame.match(/^event:\s*(.+)$/m)?.[1].trim();
-    if (
-      !type ||
-      ![
-        "run",
-        "stage",
-        "tool",
-        "delta",
-        "answer-stage",
-        "complete",
-        "error",
-      ].includes(type)
-    )
-      return;
+    if (type !== "replay") return;
     const data = frame
       .split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
-    if (data) onEvent({ type, data: JSON.parse(data) } as ChatStreamEvent);
+    if (data) {
+      const record = JSON.parse(data);
+      onEvent({ ...record, createdAt: new Date(record.createdAt) });
+    }
   };
   try {
     while (true) {
@@ -86,4 +77,72 @@ export async function consumeChatStream(
 /** 仅返回可以展示的异常消息。 */
 export function chatErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "操作失败，请重试。";
+}
+
+/** @param runId 固定尝试 ID。 @param after 已应用游标。 @param signal 只中止订阅。 @param onEvent 已持久化事件消费者。 */
+export async function subscribeChatRun(
+  runId: string,
+  after: number,
+  signal: AbortSignal,
+  onEvent: (event: StoredRunEvent) => void,
+) {
+  let cursor = after;
+  let terminal = false;
+  let failures = 0;
+  while (!terminal) {
+    signal.throwIfAborted();
+    try {
+      const response = await fetch(
+        `/api/runs/${encodeURIComponent(runId)}/events?after=${cursor}`,
+        { cache: "no-store", signal },
+      );
+      if (!response.ok) {
+        // 访问失效不能无限重连；临时网络故障可以恢复同一个游标。
+        if (response.status === 403 || response.status === 404) {
+          throw new RunUnavailableError("会话已删除或本轮回答不可访问。");
+        }
+        await readChatJson(response);
+      }
+      if (!response.body) throw new Error("无法读取回答进度。");
+      await consumeChatStream(response.body, (record) => {
+        if (record.sequence <= cursor) return;
+        onEvent(record);
+        cursor = record.sequence;
+        failures = 0;
+        terminal ||= ["run_completed", "run_failed", "run_cancelled"].includes(
+          record.eventType,
+        );
+      });
+      if (!terminal) throw new Error("回答流提前结束，正在重新连接。");
+    } catch (error) {
+      if (terminal) return;
+      if (
+        signal.aborted ||
+        error instanceof RunUnavailableError ||
+        ++failures >= 6
+      )
+        throw error;
+    }
+    if (!terminal)
+      await waitForReconnect(Math.min(500 * 2 ** failures, 8_000), signal);
+  }
+}
+
+/** 不可恢复的访问失败，不与网络断线混淆。 */
+class RunUnavailableError extends Error {}
+
+/** @param milliseconds 断线重连退避间隔。 @param signal 离开会话立即释放定时器。 */
+function waitForReconnect(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    signal.throwIfAborted();
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }

@@ -2,6 +2,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { messages, runEvents, runs } from "@/lib/db/schema";
+import { reconcileChatRun } from "@/lib/chat/run-lifecycle";
 import { getAccessibleConversation } from "@/lib/chat/conversations";
 import {
   createAssistantMessage,
@@ -28,12 +29,20 @@ export async function getConversationHistory(
   const conversation = await getAccessibleConversation(conversationId);
   if (!conversation) return null;
   const db = getDatabase();
+  const active = await db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(
+      and(eq(runs.conversationId, conversationId), eq(runs.status, "running")),
+    );
+  for (const run of active) await reconcileChatRun(run.id);
   const page = await db
     .select()
     .from(runs)
     .where(
       and(
         eq(runs.conversationId, conversationId),
+        sql`not exists (select 1 from run_events where run_id = ${runs.id} and event_type = 'run_retried')`,
         before
           ? sql`(${runs.createdAt}, ${runs.id}) < (select created_at, id from runs where id = ${before} and conversation_id = ${conversationId})`
           : undefined,
@@ -62,6 +71,8 @@ export async function getConversationHistory(
         and(
           inArray(runEvents.runId, ids),
           inArray(runEvents.eventType, [
+            "stream_event",
+            "run_cancelled",
             "provisional_delta",
             "final_delta",
             "answer_to_stage",
@@ -103,7 +114,7 @@ export async function getConversationHistory(
         ...replayMessageEvent(assistant, event as StoredRunEvent),
         runId: run.id,
       };
-    if (final && run.status === "completed") {
+    if (final) {
       assistant = {
         ...assistant,
         content: final.content,
@@ -116,21 +127,26 @@ export async function getConversationHistory(
           open: false,
         },
       };
-    } else if (assistant.process) {
+    } else if (assistant.process?.status === "running") {
       const failed = run.status === "failed";
       assistant.process = {
         ...assistant.process,
-        status: failed ? "failed" : "interrupted",
+        status:
+          run.status === "running"
+            ? "running"
+            : failed
+              ? "failed"
+              : "cancelled",
         open: true,
-        completedAt: (
-          run.completedAt ??
-          runRecords.at(-1)?.createdAt ??
-          run.createdAt
-        ).getTime(),
+        completedAt:
+          run.status === "running"
+            ? undefined
+            : (run.completedAt ?? run.createdAt).getTime(),
       };
-      assistant.error ??= failed
-        ? "这轮回答未成功完成。"
-        : "这轮回答尚未完成，刷新可查看最新已保存进度。";
+      if (run.status !== "running")
+        assistant.error ??= failed
+          ? "这轮回答未成功完成。"
+          : "已停止生成，当前回答未完成。";
     }
     result.push(assistant);
   }

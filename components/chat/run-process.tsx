@@ -95,6 +95,7 @@ function useElapsedSeconds(process: RunProcessState) {
 function getProcessLabel(status: RunProcessState["status"], elapsedSeconds: number) {
   const duration = formatDuration(elapsedSeconds);
   if (status === "running") return `正在执行 · 已用时 ${duration}`;
+  if (status === "cancelled") return `已停止 · 用时 ${duration}`;
   if (status === "interrupted") return "未完成 · 状态待确认";
   if (status === "failed") return `执行失败 · 用时 ${duration}`;
   return `用时 ${duration}`;

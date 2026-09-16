@@ -47,7 +47,7 @@ export function VaultWorkspace({
     <ConversationSidebar
       directory={directory}
       activeId={chat.id}
-      disabled={streaming || chat.phase === "deleting"}
+      disabled={chat.phase === "deleting"}
       onSelect={select}
     />
   );
@@ -136,6 +136,7 @@ export function VaultWorkspace({
               loading: chat.phase === "older",
               onLoad: () => void chat.loadOlder(),
             }}
+            onRetry={(runId) => void chat.retry(runId)}
             onProcessOpen={chat.setProcessOpen}
             onCitation={(message, citation) => {
               if (message.runId)

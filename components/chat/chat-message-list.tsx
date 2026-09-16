@@ -23,6 +23,7 @@ type ChatMessageListProps = {
   hasPublishedSnapshot: boolean;
   streaming: boolean;
   history: { hasMore: boolean; loading: boolean; onLoad: () => void };
+  onRetry: (runId: string) => void;
   onProcessOpen: (id: string, open: boolean) => void;
   onCitation: (message: ChatMessage, citation: Citation) => void;
 };
@@ -33,6 +34,7 @@ export function ChatMessageList({
   hasPublishedSnapshot,
   streaming,
   history,
+  onRetry,
   onProcessOpen,
   onCitation,
 }: ChatMessageListProps) {
@@ -91,7 +93,7 @@ export function ChatMessageList({
               {message.error && (
                 <p
                   className={
-                    message.process?.status === "interrupted"
+                    ["interrupted", "cancelled"].includes(message.process?.status ?? "")
                       ? "text-sm text-muted-foreground"
                       : "text-sm text-destructive"
                   }
@@ -99,6 +101,12 @@ export function ChatMessageList({
                 >
                   {message.error}
                 </p>
+              )}
+              {message.role === "assistant" && message.runId && message.process?.completedAt &&
+                ["failed", "cancelled"].includes(message.process.status) && (
+                <Button variant="outline" size="sm" disabled={streaming} onClick={() => onRetry(message.runId!)}>
+                  重新回答
+                </Button>
               )}
               {message.role === "assistant" && !!message.citations?.length && (
                 <div className="flex flex-wrap gap-2" aria-label="回答来源">

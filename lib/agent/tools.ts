@@ -22,8 +22,11 @@ import {
   type VaultRunState,
 } from "@/lib/agent/run-state";
 
-/** 创建绑定当前 Run 状态的只读工具及证据收集结束工具。 */
-export function createVaultTools(state: VaultRunState) {
+/** 创建绑定当前 Run 状态的只读工具及证据收集结束工具。
+ * @param state 本次执行的来源授权与预算。
+ * @param assertActive 每次启动工具前检查持久取消状态，不能仅依赖浏览器或模型信号。
+ */
+export function createVaultTools(state: VaultRunState, assertActive: () => Promise<void>) {
   return {
     list_files: tool({
       description: "列出当前已发布知识库快照的文件名、相对路径、格式和文件总数。回答有哪些文件、有多少文件时优先使用；仅列文件无需搜索或读取正文，不能凭文件名推断内容。总数以返回值为准，每页最多 30 个；用户要求完整清单且 nextOffset 非空时，在预算内继续翻页，未读全须说明仅列出部分。",
@@ -35,6 +38,7 @@ export function createVaultTools(state: VaultRunState) {
       }),
       strict: true,
       execute: async ({ offset }) => {
+        await assertActive();
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         if (!state.snapshotId) return { status: "empty-vault", message: "当前尚无已发布资料。" };
         const inventory = await readFileInventory(state.snapshotId, [offset]);
@@ -53,12 +57,13 @@ export function createVaultTools(state: VaultRunState) {
         query: z.string().trim().min(1).max(600).describe("用于检索知识库的具体问题"),
       }),
       strict: true,
-      execute: async ({ query }) => {
+      execute: async ({ query }, { abortSignal }) => {
+        await assertActive();
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         if (!state.snapshotId) return { status: "empty-vault", message: "请先导入资料。", matches: [] };
         const blocked = state.beginSearch(query);
         if (blocked) return { status: blocked, message: "请使用已有候选或说明证据缺口。", matches: [] };
-        const result = await retrievePublishedChunksWithTrace(state.snapshotId, query);
+        const result = await retrievePublishedChunksWithTrace(state.snapshotId, query, abortSignal);
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
         return {
@@ -81,6 +86,7 @@ export function createVaultTools(state: VaultRunState) {
       }),
       strict: true,
       execute: async ({ chunkIds }) => {
+        await assertActive();
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         if (!state.snapshotId) return { status: "empty-vault", message: "请先导入资料。" };
         state.assertReadable(chunkIds);
@@ -108,7 +114,8 @@ export function createVaultTools(state: VaultRunState) {
         chunkId: z.string().uuid().describe("来自此前搜索结果的 Chunk ID"),
       }),
       strict: true,
-      execute: async ({ chunkId }) => {
+      execute: async ({ chunkId }, { abortSignal }) => {
+        await assertActive();
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         if (!state.snapshotId) return { status: "empty-vault", message: "请先导入资料。", matches: [] };
         state.assertReadable([chunkId]);
@@ -119,6 +126,7 @@ export function createVaultTools(state: VaultRunState) {
         const result = await retrievePublishedChunksWithTrace(
           state.snapshotId,
           truncateSourceContent(source.content),
+          abortSignal,
         );
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
@@ -142,6 +150,7 @@ export function createVaultTools(state: VaultRunState) {
       }),
       strict: true,
       execute: async () => {
+        await assertActive();
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         return {
           status: state.getCitationCount() ? "sources-read"

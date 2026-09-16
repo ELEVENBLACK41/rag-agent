@@ -1,23 +1,22 @@
-/** 修改时间：2026-09-16 | 文件说明：问答 Run、事件和最终消息的数据库写入边界 | edit by：Sliye */
+/** 修改时间：2026-09-16 | 文件说明：问答 Run 创建、独立重试关联与受权事件读取 | edit by：Sliye */
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { ensureLocalPrincipal, LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
 import { getLatestPublishedSnapshot } from "@/lib/retrieval/search";
 import { getAccessibleConversation } from "@/lib/chat/conversations";
 import type { ChatRun } from "@/lib/chat/types";
-import type { SourceCitation as ChatCitation } from "@/lib/sources/types";
-/** 同一进程内串行化单个 Run 的事件序号；跨进程恢复留到持久执行阶段。 */
-const pendingEventWrites = new Map<string, Promise<void>>();
+import { insertRunEvent, reconcileChatRun } from "@/lib/chat/run-lifecycle";
 
 /**
  * 创建单轮问答 Run，开始后始终固定在当前已发布快照上。
  *
  * @param question 已校验的用户问题。
  * @param conversationId 可选的既有会话标识；未提供时创建新会话。
+ * @param retryRunId 用户主动重试的旧尝试，必须属于同会话且已经失败或取消。
  */
-export async function createChatRun(question: string, conversationId?: string): Promise<ChatRun> {
+export async function createChatRun(question: string, conversationId?: string, retryRunId?: string): Promise<ChatRun> {
   await ensureLocalPrincipal();
   const snapshot = await getLatestPublishedSnapshot(LOCAL_WORKSPACE_ID);
 
@@ -39,6 +38,68 @@ export async function createChatRun(question: string, conversationId?: string): 
         id: resolvedConversationId,
         workspaceId: LOCAL_WORKSPACE_ID,
         title: makeConversationTitle(question),//标题通过问题直接生成 暂时这样 后续可能会接入一个模型生成
+      });
+    }
+    // 会话锁同时约束创建、重试和删除，禁止同会话并行生成不完整上下文。
+    const [conversation] = await transaction
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, resolvedConversationId),
+          eq(conversations.workspaceId, LOCAL_WORKSPACE_ID),
+          isNull(conversations.deletedAt),
+        ),
+      )
+      .for("update");
+    if (!conversation) throw new Error("目标会话不存在或已经删除。");
+    const [active] = await transaction
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.conversationId, resolvedConversationId),
+          eq(runs.status, "running"),
+        ),
+      )
+      .limit(1);
+    if (active)
+      throw new Error("当前会话仍有执行中的回答，请等待完成或停止后再发送。");
+    if (retryRunId) {
+      const [previous] = await transaction
+        .select()
+        .from(runs)
+        .where(
+          and(
+            eq(runs.id, retryRunId),
+            eq(runs.conversationId, resolvedConversationId),
+          ),
+        )
+        .for("update");
+      const [retried] = await transaction
+        .select({ id: runEvents.id })
+        .from(runEvents)
+        .where(
+          and(
+            eq(runEvents.runId, retryRunId),
+            eq(runEvents.eventType, "run_retried"),
+          ),
+        )
+        .limit(1);
+      const [original] = await transaction
+        .select({ content: messages.content })
+        .from(messages)
+        .where(and(eq(messages.runId, retryRunId), eq(messages.role, "user")))
+        .limit(1);
+      if (
+        !previous ||
+        !["failed", "cancelled"].includes(previous.status) ||
+        retried ||
+        original?.content !== question
+      )
+        throw new Error("只能重试尚未替换的失败或已停止回答。");
+      await insertRunEvent(transaction, retryRunId, "run_retried", {
+        replacementRunId: runId,
       });
     }
     //创建运行记录
@@ -83,6 +144,7 @@ export async function getRunEvents(runId: string, afterSequence: number) {
     .innerJoin(conversations, eq(runs.conversationId, conversations.id))
     .where(and(eq(runs.id, runId), eq(conversations.workspaceId, LOCAL_WORKSPACE_ID), isNull(conversations.deletedAt))).limit(1);
   if (!accessible) return null;
+  if (await reconcileChatRun(runId) === null) return null;
   return getDatabase()
     .select({
       sequence: runEvents.sequence,
@@ -95,106 +157,7 @@ export async function getRunEvents(runId: string, afterSequence: number) {
     .orderBy(runEvents.sequence);
 }
 
-/** 以首条问题生成 D3 会话标题，避免额外模型调用。 */
+/** 以首条问题生成会话标题，避免额外模型调用。 */
 function makeConversationTitle(question: string) {
   return question.replace(/\s+/g, " ").trim().slice(0, 60);
-}
-
-/**
- * 按单 Run 的单调序号写入事件。
- *
- * 单轮流式生成与检索 Trace 都会写入事件，因此在当前执行器中串行化 sequence 分配。
- * D10 的跨进程恢复会补充持久执行租约和数据库级并发处理。
- */
-export async function appendRunEvent(runId: string, eventType: string, payload: object) {
-  const previousWrite = pendingEventWrites.get(runId) ?? Promise.resolve();
-  const write = previousWrite
-    .catch(() => undefined)
-    .then(() => writeRunEvent(runId, eventType, payload));
-  pendingEventWrites.set(runId, write);
-  try {
-    await write;
-  } finally {
-    if (pendingEventWrites.get(runId) === write) pendingEventWrites.delete(runId);
-  }
-}
-
-/** 在已串行化的上下文中查询并分配下一个事件序号。 */
-async function writeRunEvent(runId: string, eventType: string, payload: object) {
-  const db = getDatabase();
-  const [lastEvent] = await db
-    .select({ sequence: runEvents.sequence })
-    .from(runEvents)
-    .where(eq(runEvents.runId, runId))
-    .orderBy(desc(runEvents.sequence))
-    .limit(1);
-
-  await db.insert(runEvents).values({
-    id: randomUUID(),
-    runId,
-    sequence: (lastEvent?.sequence ?? 0) + 1,
-    eventType,
-    payload,
-  });
-}
-
-/** 同一事务提交最终回答、Run 终态与完成事件，避免刷新后出现双重完成。 */
-export async function completeChatRun(chatRun: ChatRun, answer: string, citations: ChatCitation[]) {
-  const db = getDatabase();
-  await db.transaction(async (transaction) => {
-    const [lastEvent] = await transaction
-      .select({ sequence: runEvents.sequence })
-      .from(runEvents)
-      .where(eq(runEvents.runId, chatRun.runId))
-      .orderBy(desc(runEvents.sequence))
-      .limit(1);
-  //保存助手消息
-    await transaction.insert(messages).values({
-      id: randomUUID(),
-      conversationId: chatRun.conversationId,
-      runId: chatRun.runId,
-      role: "assistant",
-      content: answer,
-      status: "completed",
-      citations,
-    });
-  //更新run得状态
-    await transaction
-      .update(runs)
-      .set({ status: "completed", completedAt: new Date() })
-      .where(eq(runs.id, chatRun.runId));
-  //写入完成事件
-    await transaction.insert(runEvents).values({
-      id: randomUUID(),
-      runId: chatRun.runId,
-      sequence: (lastEvent?.sequence ?? 0) + 1,
-      eventType: "run_completed",
-      payload: { citations },
-    });
-  });
-}
-
-/** 保存失败终态与安全错误消息，保留此前已验证的事件。 */
-export async function failChatRun(runId: string, message: string) {
-  const db = getDatabase();
-  await db.transaction(async (transaction) => {
-    const [lastEvent] = await transaction
-      .select({ sequence: runEvents.sequence })
-      .from(runEvents)
-      .where(eq(runEvents.runId, runId))
-      .orderBy(desc(runEvents.sequence))
-      .limit(1);
-
-    await transaction
-      .update(runs)
-      .set({ status: "failed", completedAt: new Date() })
-      .where(eq(runs.id, runId));
-    await transaction.insert(runEvents).values({
-      id: randomUUID(),
-      runId,
-      sequence: (lastEvent?.sequence ?? 0) + 1,
-      eventType: "run_failed",
-      payload: { message: message.slice(0, 500) },
-    });
-  });
 }

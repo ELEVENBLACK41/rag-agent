@@ -121,11 +121,12 @@ export function applyChatEvent(
           ),
         },
       };
+    case "cancelled":
     case "error":
       return {
         ...message,
         error: event.data.message,
-        process: { ...process, status: "failed", completedAt: now, open: true },
+        process: { ...process, status: event.type === "cancelled" ? "cancelled" : "failed", completedAt: now, open: true },
       };
   }
 }
@@ -135,10 +136,16 @@ export function replayMessageEvent(
   message: ChatMessage,
   record: StoredRunEvent,
 ): ChatMessage {
+  if (record.sequence <= (message.lastSequence ?? 0)) return message;
+  message = { ...message, lastSequence: record.sequence };
   const payload = record.payload;
   const now = record.createdAt.getTime();
   let event: ChatStreamEvent;
   switch (record.eventType) {
+    case "stream_event":
+      return { ...applyChatEvent(message, payload as ChatStreamEvent, now), legacyCitationMarkers: false };
+    case "run_cancelled":
+      return applyChatEvent(message, { type: "cancelled", data: { message: String(payload.message) } }, now);
     case "final_delta":
     case "provisional_delta":
       return {

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent DAY8 已发布快照的混合检索与重排序。
  *
  * 本模块只读取固定快照：关键词、向量、RRF 与 rerank 的每一步都返回不含正文的
@@ -90,10 +90,12 @@ export async function retrievePublishedChunks(snapshotId: string, question: stri
  *
  * @param snapshotId 已发布且固定的索引快照标识。
  * @param question 已在 API 边界完成长度校验的用户问题。
+ * @param abortSignal 调用方取消信号；取消不作为检索降级继续执行。
  */
 export async function retrievePublishedChunksWithTrace(
   snapshotId: string,
   question: string,
+  abortSignal?: AbortSignal,
 ): Promise<RetrievalResult> {
   //从keyword提取出来的关键词keywordTerms
   const keywordTerms = extractKeywordTerms(question);
@@ -102,7 +104,7 @@ export async function retrievePublishedChunksWithTrace(
     //关键词候选
     retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds),
     //向量候选
-    retrieveVectorCandidates(snapshotId, question, activeFileVersionIds),
+    retrieveVectorCandidates(snapshotId, question, activeFileVersionIds, abortSignal),
   ]);
   const fusedCandidates = fuseWithRrf<RetrievedChunk>(
     keywordCandidates,
@@ -111,7 +113,7 @@ export async function retrievePublishedChunksWithTrace(
   )
     .slice(0, RERANK_CANDIDATE_LIMIT)
     .map((candidate, index) => ({ ...candidate, fusionRank: index + 1 }));
-  const reranked = await rerankCandidates(question, fusedCandidates);
+  const reranked = await rerankCandidates(question, fusedCandidates, abortSignal);
 
   const trace: RetrievalTrace = {
     version: "day8-hybrid-v2-latest-file",
@@ -184,6 +186,7 @@ async function retrieveVectorCandidates(
   snapshotId: string,
   question: string,
   activeFileVersionIds: string[],
+  abortSignal?: AbortSignal,
 ): Promise<VectorCandidateResult> {
   try {
     if (!activeFileVersionIds.length) {
@@ -192,7 +195,10 @@ async function retrieveVectorCandidates(
     if (!process.env.AI_GATEWAY_API_KEY) {
       throw new Error("AI_GATEWAY_API_KEY is required before vector retrieval.");
     }
+    // 官方：https://ai-sdk.dev/docs/reference/ai-sdk-core/embed；取消传播到查询向量请求。
+    abortSignal?.throwIfAborted();
     const { embedding } = await embed({
+      abortSignal,
       model: gateway.embeddingModel(EMBEDDING_MODEL), // 使用 Gateway Embedding 模型
       value: question, // 用户问题文本,用户的问题文本只向量化一次，所以不会用到embedMany
     });
@@ -236,6 +242,7 @@ async function retrieveVectorCandidates(
       })),
     };
   } catch (error) {
+    abortSignal?.throwIfAborted();
     return {
       status: "fallback" as const,
       reason: getSafeRetrievalError(error),
@@ -248,7 +255,9 @@ async function retrieveVectorCandidates(
 async function rerankCandidates(
   question: string,
   candidates: RetrievedChunk[],
+  abortSignal?: AbortSignal,
 ): Promise<RerankExecution> {
+  abortSignal?.throwIfAborted();
   const inputChunkIds = candidates.map((candidate) => candidate.chunkId);
   if (!candidates.length) {
     return {
@@ -275,7 +284,7 @@ async function rerankCandidates(
       query: question,//用户问题
       topN: FINAL_RETRIEVAL_LIMIT,
       maxRetries: 0,
-      abortSignal: AbortSignal.timeout(RERANK_TIMEOUT_MS),
+      abortSignal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(RERANK_TIMEOUT_MS)]) : AbortSignal.timeout(RERANK_TIMEOUT_MS),
     });
     const rerankedChunks: RetrievedChunk[] = [];
     for (const ranking of result.ranking) {
@@ -301,6 +310,7 @@ async function rerankCandidates(
       },
     };
   } catch (error) {
+    abortSignal?.throwIfAborted();
     return fallbackToFusion(
       candidates,
       inputChunkIds,

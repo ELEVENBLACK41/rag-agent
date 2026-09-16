@@ -11,6 +11,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, runs } from "@/lib/db/schema";
 import { LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
+import { finishRun } from "@/lib/chat/run-lifecycle";
 import type { ConversationList } from "@/lib/chat/types";
 
 /** 每次只读取有限会话，避免目录随历史增长无界返回。 */
@@ -69,16 +70,35 @@ export async function listConversations(
 
 /** 软删除只影响当前工作区的会话，不删除知识库文件。 */
 export async function deleteConversation(conversationId: string) {
-  const deleted = await getDatabase()
-    .update(conversations)
-    .set({ deletedAt: new Date() })
-    .where(
-      and(
-        eq(conversations.id, conversationId),
-        eq(conversations.workspaceId, LOCAL_WORKSPACE_ID),
-        isNull(conversations.deletedAt),
-      ),
-    )
-    .returning({ id: conversations.id });
-  return deleted.length > 0;
+  return getDatabase().transaction(async (tx) => {
+    const [conversation] = await tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.workspaceId, LOCAL_WORKSPACE_ID),
+          isNull(conversations.deletedAt),
+        ),
+      )
+      .for("update");
+    if (!conversation) return false;
+    const active = await tx
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.conversationId, conversationId),
+          eq(runs.status, "running"),
+        ),
+      )
+      .for("update");
+    for (const run of active)
+      await finishRun(tx, run, "cancelled", "会话已删除，执行已停止。");
+    await tx
+      .update(conversations)
+      .set({ deletedAt: new Date() })
+      .where(eq(conversations.id, conversationId));
+    return true;
+  });
 }

@@ -2,16 +2,16 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  applyChatEvent,
+  replayMessageEvent,
   createAssistantMessage,
 } from "@/lib/chat/message-state";
 import {
   chatErrorMessage,
-  consumeChatStream,
+  subscribeChatRun,
   fetchConversation,
   readChatJson,
 } from "@/components/chat/chat-client";
-import type { ChatMessage } from "@/lib/chat/types";
+import type { ChatMessage, ChatRun } from "@/lib/chat/types";
 
 type ChatSession = {
   id: string | null;
@@ -39,6 +39,9 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
   const phaseRef = useRef<typeof phase>("loading");
   /** 每次切换递增，过期响应不得覆盖新会话。 */
   const requestRef = useRef(0);
+  /** 主动取消与订阅 AbortController 独立；尚未拿到 Run ID 时记住停止请求。 */
+  const activeRunRef = useRef<string | null>(null);
+  const cancelRequestedRef = useRef(false);
   const controllerRef = useRef<AbortController | null>(null);
 
   /** URL 路径只保存会话 ID；使用原生 History API 避免首次创建会话时打断回答流。
@@ -55,6 +58,8 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
   const selectConversation = useCallback(
     async (id: string | null, writeUrl = true) => {
       controllerRef.current?.abort();
+      activeRunRef.current = null;
+      cancelRequestedRef.current = false;
       const controller = new AbortController();
       controllerRef.current = controller;
       const request = ++requestRef.current;
@@ -67,18 +72,30 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
       if (!id) return;
       try {
         const history = await fetchConversation(id, controller.signal);
-        if (request === requestRef.current)
+        if (request === requestRef.current) {
           setSession({
             id,
             title: history.conversation.title,
             messages: history.messages,
             nextBefore: history.nextBefore,
           });
+          const active = history.messages.find((message) => message.role === "assistant" && message.process?.status === "running");
+          if (active?.runId) {
+            activeRunRef.current = active.runId;
+            phaseRef.current = "streaming";
+            setPhase("streaming");
+            await subscribeChatRun(active.runId, active.lastSequence ?? 0, controller.signal, (event) => {
+              if (request === requestRef.current) setSession((current) => ({ ...current, messages: current.messages.map((message) =>
+                message.id === active.id ? replayMessageEvent(message, event) : message) }));
+            });
+          }
+        }
       } catch (cause) {
         if (request === requestRef.current && !controller.signal.aborted)
           setError(chatErrorMessage(cause));
       } finally {
         if (request === requestRef.current) {
+          activeRunRef.current = null;
           phaseRef.current = null;
           setPhase(null);
         }
@@ -143,102 +160,87 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
     }
   }
 
-  /** @param text 输入框的已提交内容；只发送当前问题，历史由服务端按会话范围读取。 */
-  async function submitQuestion(text: string) {
+  /** @param text 当前问题。 @param retryRunId 主动重试时替换旧尝试，服务端校验原问题与归属。 */
+  async function submitQuestion(text: string, retryRunId?: string) {
     const question = text.trim();
     if (!question || phaseRef.current) return;
     const controller = new AbortController();
     controllerRef.current = controller;
     const request = ++requestRef.current;
     const assistantId = crypto.randomUUID();
-    let conversationId = session.id;
-    let completed = false;
+    activeRunRef.current = null;
+    cancelRequestedRef.current = false;
     phaseRef.current = "streaming";
     setPhase("streaming");
     setInput("");
     setError(null);
-    setSession((current) => ({
-      ...current,
-      messages: [
-        ...current.messages,
-        { id: crypto.randomUUID(), role: "user", content: question },
-        createAssistantMessage(assistantId, Date.now()),
-      ],
-    }));
-    /** 将更新限定到本次助手消息和当前请求，切换会话后忽略旧流。 */
+    setSession((current) => ({ ...current, messages: [
+      ...current.messages,
+      { id: crypto.randomUUID(), role: "user", content: question },
+      createAssistantMessage(assistantId, Date.now()),
+    ] }));
+    /** 当前请求和助手消息同时匹配，旧订阅不会覆盖新会话。 */
     const updateAssistant = (update: (message: ChatMessage) => ChatMessage) => {
-      if (request === requestRef.current)
-        setSession((current) => ({
-          ...current,
-          messages: current.messages.map((message) =>
-            message.id === assistantId ? update(message) : message,
-          ),
-        }));
+      if (request === requestRef.current) setSession((current) => ({ ...current,
+        messages: current.messages.map((message) => message.id === assistantId ? update(message) : message),
+      }));
     };
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, conversationId }),
-        signal: controller.signal,
-      });
-      if (!response.ok) await readChatJson(response);
-      if (!response.body) throw new Error("无法接收回答，请重试。");
-      await consumeChatStream(response.body, (event) => {
-        if (request !== requestRef.current) return;
-        if (event.type === "run") {
-          conversationId = event.data.conversationId;
-          updateUrl(conversationId, true);
-          setSession((current) => ({
-            ...current,
-            id: conversationId,
-            title: current.id ? current.title : question.slice(0, 60),
-          }));
-          void refreshDirectory();
-        }
-        if (event.type === "complete") completed = true;
-        updateAssistant((message) =>
-          applyChatEvent(message, event, Date.now()),
-        );
-        if (event.type === "error") throw new Error(event.data.message);
-      });
-      if (!completed && conversationId && request === requestRef.current) {
-        const history = await fetchConversation(
-          conversationId,
-          controller.signal,
-        );
-        if (request === requestRef.current)
-          setSession({
-            id: conversationId,
-            title: history.conversation.title,
-            messages: history.messages,
-            nextBefore: history.nextBefore,
-          });
+      const run = await readChatJson<ChatRun>(await fetch("/api/chat", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, conversationId: session.id, retryRunId }), signal: controller.signal,
+      }));
+      if (request !== requestRef.current) return;
+      activeRunRef.current = run.runId;
+      updateUrl(run.conversationId, true);
+      setSession((current) => ({ ...current, id: run.conversationId,
+        title: current.id ? current.title : question.slice(0, 60),
+        messages: current.messages.filter((message) => !retryRunId || message.runId !== retryRunId).map((message, index, all) =>
+          index === all.length - 2 ? { ...message, runId: run.runId } : message),
+      }));
+      updateAssistant((message) => ({ ...message, runId: run.runId }));
+      void refreshDirectory();
+      if (cancelRequestedRef.current) {
+        try { await cancelRun(run.runId); }
+        catch (cause) { if (request === requestRef.current) setError(chatErrorMessage(cause)); }
       }
+      await subscribeChatRun(run.runId, 0, controller.signal, (record) => {
+        updateAssistant((message) => replayMessageEvent(message, record));
+      });
     } catch (cause) {
-      const stopped = controller.signal.aborted;
-      updateAssistant((message) => ({
-        ...message,
-        error: stopped
-          ? "已停止接收回答。后台状态尚未确认，刷新可查看已保存进度。"
-          : chatErrorMessage(cause),
-        process: message.process
-          ? {
-              ...message.process,
-              status: stopped ? "interrupted" : "failed",
-              completedAt: Date.now(),
-              open: true,
-            }
-          : undefined,
+      if (!controller.signal.aborted) updateAssistant((message) => ({ ...message,
+        error: activeRunRef.current ? "连接中断，后台可能仍在执行。刷新当前会话可继续接收。" : chatErrorMessage(cause),
+        process: message.process ? { ...message.process, status: "interrupted", open: true } : undefined,
       }));
     } finally {
       if (request === requestRef.current) {
         controllerRef.current = null;
+        activeRunRef.current = null;
         phaseRef.current = null;
         setPhase(null);
         void refreshDirectory();
       }
     }
+  }
+
+  /** @param runId 已创建的尝试。取消失败不伪造已停止，保留订阅以接收真实状态。 */
+  async function cancelRun(runId: string) {
+    await readChatJson(await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }));
+  }
+
+  /** 主动停止写入服务端；切换或卸载仅断开订阅。 */
+  async function stop() {
+    cancelRequestedRef.current = true;
+    if (!activeRunRef.current) return;
+    const request = requestRef.current;
+    try { await cancelRun(activeRunRef.current); }
+    catch (cause) { if (request === requestRef.current) setError(chatErrorMessage(cause)); }
+  }
+
+  /** @param runId 旧尝试，使用已保存的原问题创建新 Run。 */
+  async function retry(runId: string) {
+    const user = session.messages.find((message) => message.runId === runId && message.role === "user");
+    if (user) await submitQuestion(user.content, runId);
   }
 
   /** 仅删除当前会话；失败保留原消息供用户重试。 */
@@ -282,7 +284,8 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
     selectConversation,
     loadOlder,
     removeConversation,
-    stop: () => controllerRef.current?.abort(),
+    stop,
+    retry,
     setProcessOpen: (id: string, open: boolean) =>
       setSession((current) => ({
         ...current,

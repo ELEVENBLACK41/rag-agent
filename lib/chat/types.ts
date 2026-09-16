@@ -33,6 +33,7 @@ export type ChatStreamEvent =
   | { type: "delta"; data: { text: string; provisional?: boolean } }
   | { type: "answer-stage"; data: { stages: ChatStageUpdate[] } }
   | { type: "complete"; data: { citations: SourceCitation[] } }
+  | { type: "cancelled"; data: { message: string } }
   | { type: "error"; data: { message: string } };
 export type RunProcessEvent =
   | {
@@ -48,7 +49,7 @@ export type RunProcessEvent =
       status: "started" | "completed" | "failed";
     };
 export type RunProcessState = {
-  status: "running" | "completed" | "failed" | "interrupted";
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
   startedAt: number;
   completedAt?: number;
   open: boolean;
@@ -60,6 +61,8 @@ export type ChatMessage = {
   content: string;
   runId?: string;
   citations?: SourceCitation[];
+  /** 已应用的持久事件游标，用于历史恢复后的精确补齐。 */
+  lastSequence?: number;
   legacyCitationMarkers?: boolean;
   process?: RunProcessState;
   error?: string;
