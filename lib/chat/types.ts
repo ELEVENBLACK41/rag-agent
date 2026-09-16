@@ -63,7 +63,6 @@ export type ChatMessage = {
   citations?: SourceCitation[];
   /** 已应用的持久事件游标，用于历史恢复后的精确补齐。 */
   lastSequence?: number;
-  legacyCitationMarkers?: boolean;
   process?: RunProcessState;
   error?: string;
 };

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-16 | 文件说明：独立来源列表校验与旧版正文引用兼容展示 | edit by：Sliye
+ * 修改时间：2026-09-16 | 文件说明：校验独立来源列表，不解析正文引用标记 | edit by：Sliye
  */
 
 import type { SourceCitation } from "@/lib/sources/types";
@@ -19,23 +19,4 @@ export function selectAnswerCitations(citationIds: number[], sources: SourceCita
     if (!source) throw new Error("回答包含无效来源编号，请重新提问。");
     return source;
   });
-}
-
-/**
- * 仅供旧事件回放：隐藏历史正文中的引用标记，新版正文不经过此函数。
- * @param content 旧版累积的原始回答，可能保留内部编号。
- * @param streaming 是否仍可能接收后续字符。
- * @param citations 历史回答的已发布引用，用于兼容旧的纯数字编号。
- */
-export function getVisibleAnswer(content: string, streaming = false, citations: SourceCitation[] = []) {
-  const legacyIds = new Set(content.includes("【来源:") ? [] : citations.map((citation) => citation.id));
-  const visible = content.replace(/【来源:[^】]*】/g, "").replace(/【来源:[^】]*$/, "").replace(/【(\d+)】/g,
-    (marker, id: string) => legacyIds.has(Number(id)) ? "" : marker);
-  if (!streaming) return visible;
-  const start = visible.lastIndexOf("【");
-  if (start < 0) return visible;
-  const tail = visible.slice(start);
-  return "【来源:".startsWith(tail) || /^【来源:\d*$/.test(tail)
-    ? visible.slice(0, start)
-    : visible;
 }

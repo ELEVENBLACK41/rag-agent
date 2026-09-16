@@ -119,7 +119,6 @@ export async function getConversationHistory(
         ...assistant,
         content: final.content,
         citations: final.citations as SourceCitation[],
-        legacyCitationMarkers: assistant.legacyCitationMarkers ?? true,
         process: {
           ...assistant.process!,
           status: "completed",

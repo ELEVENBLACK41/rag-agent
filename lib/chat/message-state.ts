@@ -103,7 +103,6 @@ export function applyChatEvent(
       return {
         ...message,
         content: "",
-        legacyCitationMarkers: false,
         process: next,
       };
     }
@@ -143,7 +142,7 @@ export function replayMessageEvent(
   let event: ChatStreamEvent;
   switch (record.eventType) {
     case "stream_event":
-      return { ...applyChatEvent(message, payload as ChatStreamEvent, now), legacyCitationMarkers: false };
+      return applyChatEvent(message, payload as ChatStreamEvent, now);
     case "run_cancelled":
       return applyChatEvent(message, { type: "cancelled", data: { message: String(payload.message) } }, now);
     case "final_delta":
@@ -160,7 +159,6 @@ export function replayMessageEvent(
           },
           now,
         ),
-        legacyCitationMarkers: payload.format !== "plain",
       };
     case "answer_to_stage":
       event = {

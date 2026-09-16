@@ -14,7 +14,6 @@ import {
 import { RunProcess } from "@/components/chat/run-process";
 import { Button } from "@/components/ui/button";
 import { FileTextIcon } from "lucide-react";
-import { getVisibleAnswer } from "@/lib/chat/citations";
 import type { ChatMessage } from "@/lib/chat/types";
 import type { SourceCitation as Citation } from "@/lib/sources/types";
 
@@ -78,13 +77,7 @@ export function ChatMessageList({
                         streaming && message.id === messages.at(-1)?.id
                       }
                     >
-                      {message.legacyCitationMarkers
-                        ? getVisibleAnswer(
-                            message.content,
-                            false,
-                            message.citations,
-                          )
-                        : message.content}
+                      {message.content}
                     </MessageResponse>
                   ) : (
                     message.content

@@ -2,11 +2,9 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { ModelMessage } from "ai";
 import { getDatabase } from "@/lib/db/client";
-import { messages, runEvents, runs } from "@/lib/db/schema";
+import { messages, runs } from "@/lib/db/schema";
 import { getAccessibleConversation } from "@/lib/chat/conversations";
-import { getVisibleAnswer } from "@/lib/chat/citations";
 import type { ChatRun } from "@/lib/chat/types";
-import type { SourceCitation } from "@/lib/sources/types";
 
 /** 保留最近完整问答，避免长期对话不断放大模型请求。 */
 export const MAX_HISTORY_TURNS = 8;
@@ -86,29 +84,16 @@ export async function loadConversationContext(
     .limit(MAX_HISTORY_TURNS + 1);
   if (!previous.length) return buildConversationContext([], question);
   const ids = previous.map((entry) => entry.id);
-  const [rows, plainRuns] = await Promise.all([
-    db
-      .select()
-      .from(messages)
-      .where(
-        and(
-          eq(messages.conversationId, run.conversationId),
-          inArray(messages.runId, ids),
-          eq(messages.status, "completed"),
-        ),
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, run.conversationId),
+        inArray(messages.runId, ids),
+        eq(messages.status, "completed"),
       ),
-    db
-      .selectDistinct({ runId: runEvents.runId })
-      .from(runEvents)
-      .where(
-        and(
-          inArray(runEvents.runId, ids),
-          inArray(runEvents.eventType, ["final_delta", "provisional_delta"]),
-          sql`${runEvents.payload}->>'format' = 'plain'`,
-        ),
-      ),
-  ]);
-  const plain = new Set(plainRuns.map((entry) => entry.runId));
+    );
   const turns = previous.flatMap((entry) => {
     const user = rows.find(
       (message) => message.runId === entry.id && message.role === "user",
@@ -120,13 +105,7 @@ export async function loadConversationContext(
     return [
       {
         question: user.content,
-        answer: plain.has(entry.id)
-          ? assistant.content
-          : getVisibleAnswer(
-              assistant.content,
-              false,
-              assistant.citations as SourceCitation[],
-            ),
+        answer: assistant.content,
       },
     ];
   });
