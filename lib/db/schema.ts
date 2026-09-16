@@ -20,6 +20,7 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
+import type { AuditReport } from "@/lib/audit/types";
 
 /** 以 pgvector 存储 Gateway 固定输出的 1024 维向量。 */
 const vector = customType<{ data: number[]; driverData: string }>({
@@ -146,6 +147,14 @@ export const indexSnapshotFiles = pgTable(
     index("index_snapshot_files_version_idx").on(table.fileVersionId),
   ],
 );
+
+/** 每个快照保留最近一次结构审计报告；重跑覆盖结果，不向 Run 混入非模型任务。 */
+export const structureAuditReports = pgTable("structure_audit_reports", {
+  snapshotId: varchar("snapshot_id", { length: 64 }).primaryKey()
+    .references(() => indexSnapshots.id, { onDelete: "cascade" }),
+  report: jsonb("report").$type<AuditReport>().notNull(),
+  checkedAt: timestamp("checked_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const imports = pgTable(
   "imports",

@@ -1,7 +1,7 @@
 /** 修改时间：2026-09-16 | 文件说明：桌面与移动端复用的会话目录展示 | edit by：Sliye */
 "use client";
 import Link from "next/link";
-import { BookOpenIcon, SquarePenIcon, RefreshCwIcon } from "lucide-react";
+import { BookOpenIcon, SquarePenIcon, RefreshCwIcon, ListChecksIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { useConversationDirectory } from "@/components/chat/use-conversation-directory";
@@ -39,6 +39,9 @@ export function ConversationSidebar({
           <BookOpenIcon className="size-4" />
           管理知识库
         </Link>
+      </Button>
+      <Button asChild variant="ghost" className="h-10 justify-start gap-3 rounded-xl px-3">
+        <Link href="/audit"><ListChecksIcon className="size-4" />结构审计</Link>
       </Button>
       <div className="mt-7 flex items-center justify-between px-2 pb-1">
         <h2 className="text-xs font-medium text-muted-foreground">最近会话</h2>

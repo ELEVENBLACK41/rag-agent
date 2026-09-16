@@ -31,7 +31,7 @@ export class ChatExecutionError extends Error {}
 /** Agent 与最终回答共同使用的已验证主模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
 /** 最终回答输出上限，避免上下文与费用无界增长。 */
-const MAX_OUTPUT_TOKENS = 1_200;
+const MAX_OUTPUT_TOKENS = 3_600;
 
 /**
  * 未调用工具时直接完成回答；调用工具后执行受限证据收集与独立最终生成。

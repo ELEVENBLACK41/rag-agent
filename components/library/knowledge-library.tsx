@@ -37,9 +37,12 @@ export function KnowledgeLibrary() {
               <p className="text-sm text-muted-foreground">上传、查看版本与管理 AI 检索范围</p>
             </div>
           </div>
+          <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline"><Link href="/audit">结构审计</Link></Button>
           <Button asChild variant="outline">
             <Link href="/chat"><ArrowLeftIcon className="size-4" /> 返回聊天</Link>
           </Button>
+          </div>
         </div>
       </header>
       <section className="mx-auto max-w-7xl px-5 py-8">

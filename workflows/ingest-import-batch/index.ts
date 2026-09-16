@@ -21,6 +21,7 @@ import {
   publishImportBatch,
   startBatchImport,
 } from "@/workflows/ingest-import-batch/steps";
+import { auditPublishedImport } from "@/workflows/ingest-import-batch/audit-step";
 
 /**
  * 编排一个候选导入快照：每个可索引文件独立解析/向量化，全部就绪后才发布。
@@ -30,6 +31,7 @@ import {
 export async function ingestImportBatchWorkflow(batchId: string) {
   "use workflow";
 
+  let embeddedChunkCount = 0;
   try {
     /**
      * 第一个step 
@@ -41,7 +43,6 @@ export async function ingestImportBatchWorkflow(batchId: string) {
     await startBatchImport(batchId);
     //找出本批需要处理得文件，按 MIME 类型筛选
     const indexableImports = await listBatchIndexableImports(batchId);
-    let embeddedChunkCount = 0;
     //这个循环为捉个文件处理，串行处理
     for (const indexableImport of indexableImports) {
       try {
@@ -75,7 +76,6 @@ export async function ingestImportBatchWorkflow(batchId: string) {
       embeddedChunkCount += await embedStoredChunks(importId);
     // 所有可索引文件都 ready后发布整个批次
     await publishImportBatch(batchId);
-    return { embeddedChunkCount };
   } catch (error) {
     const errorMessage = getErrorMessage(
       error,
@@ -84,4 +84,7 @@ export async function ingestImportBatchWorkflow(batchId: string) {
     await failImportBatch(batchId, errorMessage);
     throw error;
   }
+  // 发布已提交，审计失败只能重试审计，不得将成功的导入倒退成失败。
+  await auditPublishedImport(batchId);
+  return { embeddedChunkCount };
 }
