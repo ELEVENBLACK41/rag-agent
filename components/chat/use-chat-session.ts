@@ -1,6 +1,7 @@
-/** 修改时间：2026-09-16 | 文件说明：当前会话加载、历史分页与聊天流的客户端生命周期 | edit by：Sliye */
+/** 修改时间：2026-09-16 | 文件说明：持久工作区内的会话加载、路由同步、历史分页与聊天流生命周期 | edit by：Sliye */
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   replayMessageEvent,
   createAssistantMessage,
@@ -29,6 +30,9 @@ const EMPTY_SESSION: ChatSession = {
 
 /** @param refreshDirectory 会话创建、完成或删除后刷新侧栏。 */
 export function useChatSession(refreshDirectory: () => Promise<void>) {
+  const pathname = usePathname();
+  /** 区分尚未恢复与新会话，避免原生 URL 更新再次加载并打断当前流。 */
+  const selectedConversationRef = useRef<string | null | undefined>(undefined);
   const [session, setSession] = useState<ChatSession>(EMPTY_SESSION);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +54,8 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
    * @param replace 首次创建会话时替换当前历史项。
    */
   const updateUrl = useCallback((id: string | null, replace = false) => {
+    // 用户已转去知识库/审计时，后台拿到 Run ID 不能把路由抢回聊天。
+    if (!/^\/chat(?:\/|$)/.test(window.location.pathname)) return;
     const url = id ? `/chat/${encodeURIComponent(id)}` : "/chat";
     window.history[replace ? "replaceState" : "pushState"](null, "", url);
   }, []);
@@ -57,6 +63,7 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
   /** 切换时立即清空旧内容；加载失败不能让旧会话消息出现在新会话下面。 */
   const selectConversation = useCallback(
     async (id: string | null, writeUrl = true) => {
+      selectedConversationRef.current = id;
       controllerRef.current?.abort();
       activeRunRef.current = null;
       cancelRequestedRef.current = false;
@@ -79,15 +86,31 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
             messages: history.messages,
             nextBefore: history.nextBefore,
           });
-          const active = history.messages.find((message) => message.role === "assistant" && message.process?.status === "running");
+          const active = history.messages.find(
+            (message) =>
+              message.role === "assistant" &&
+              message.process?.status === "running",
+          );
           if (active?.runId) {
             activeRunRef.current = active.runId;
             phaseRef.current = "streaming";
             setPhase("streaming");
-            await subscribeChatRun(active.runId, active.lastSequence ?? 0, controller.signal, (event) => {
-              if (request === requestRef.current) setSession((current) => ({ ...current, messages: current.messages.map((message) =>
-                message.id === active.id ? replayMessageEvent(message, event) : message) }));
-            });
+            await subscribeChatRun(
+              active.runId,
+              active.lastSequence ?? 0,
+              controller.signal,
+              (event) => {
+                if (request === requestRef.current)
+                  setSession((current) => ({
+                    ...current,
+                    messages: current.messages.map((message) =>
+                      message.id === active.id
+                        ? replayMessageEvent(message, event)
+                        : message,
+                    ),
+                  }));
+              },
+            );
           }
         }
       } catch (cause) {
@@ -107,19 +130,22 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
   useEffect(() => {
     const restore = () => {
       // 直接打开、刷新及前进/后退统一从动态路径恢复会话，不读取查询参数。
-      const match = window.location.pathname.match(/^\/chat\/([^/]+)\/?$/);
-      void selectConversation(
-        match ? decodeURIComponent(match[1]) : null,
-        false,
-      );
+      if (!/^\/chat(?:\/|$)/.test(pathname)) return;
+      const match = pathname.match(/^\/chat\/([^/]+)\/?$/);
+      const id = match ? decodeURIComponent(match[1]) : null;
+      if (selectedConversationRef.current !== id)
+        void selectConversation(id, false);
     };
     restore();
-    window.addEventListener("popstate", restore);
-    return () => {
-      window.removeEventListener("popstate", restore);
-      controllerRef.current?.abort();
-    };
-  }, [selectConversation]);
+  }, [pathname, selectConversation]);
+
+  /** 只有整个工作区卸载才释放订阅，页面切换不取消后台生成。 */
+  const disconnect = useCallback(() => {
+    selectedConversationRef.current = undefined;
+    requestRef.current += 1;
+    controllerRef.current?.abort();
+  }, []);
+  useEffect(() => disconnect, [disconnect]);
 
   /** 同一会话向前加载完整问答；通过消息 ID 去重，不覆盖较新的消息。 */
   async function loadOlder() {
@@ -174,44 +200,76 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
     setPhase("streaming");
     setInput("");
     setError(null);
-    setSession((current) => ({ ...current, messages: [
-      ...current.messages,
-      { id: crypto.randomUUID(), role: "user", content: question },
-      createAssistantMessage(assistantId, Date.now()),
-    ] }));
+    setSession((current) => ({
+      ...current,
+      messages: [
+        ...current.messages,
+        { id: crypto.randomUUID(), role: "user", content: question },
+        createAssistantMessage(assistantId, Date.now()),
+      ],
+    }));
     /** 当前请求和助手消息同时匹配，旧订阅不会覆盖新会话。 */
     const updateAssistant = (update: (message: ChatMessage) => ChatMessage) => {
-      if (request === requestRef.current) setSession((current) => ({ ...current,
-        messages: current.messages.map((message) => message.id === assistantId ? update(message) : message),
-      }));
+      if (request === requestRef.current)
+        setSession((current) => ({
+          ...current,
+          messages: current.messages.map((message) =>
+            message.id === assistantId ? update(message) : message,
+          ),
+        }));
     };
     try {
-      const run = await readChatJson<ChatRun>(await fetch("/api/chat", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, conversationId: session.id, retryRunId }), signal: controller.signal,
-      }));
+      const run = await readChatJson<ChatRun>(
+        await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question,
+            conversationId: session.id,
+            retryRunId,
+          }),
+          signal: controller.signal,
+        }),
+      );
       if (request !== requestRef.current) return;
       activeRunRef.current = run.runId;
+      selectedConversationRef.current = run.conversationId;
       updateUrl(run.conversationId, true);
-      setSession((current) => ({ ...current, id: run.conversationId,
+      setSession((current) => ({
+        ...current,
+        id: run.conversationId,
         title: current.id ? current.title : question.slice(0, 60),
-        messages: current.messages.filter((message) => !retryRunId || message.runId !== retryRunId).map((message, index, all) =>
-          index === all.length - 2 ? { ...message, runId: run.runId } : message),
+        messages: current.messages
+          .filter((message) => !retryRunId || message.runId !== retryRunId)
+          .map((message, index, all) =>
+            index === all.length - 2
+              ? { ...message, runId: run.runId }
+              : message,
+          ),
       }));
       updateAssistant((message) => ({ ...message, runId: run.runId }));
       void refreshDirectory();
       if (cancelRequestedRef.current) {
-        try { await cancelRun(run.runId); }
-        catch (cause) { if (request === requestRef.current) setError(chatErrorMessage(cause)); }
+        try {
+          await cancelRun(run.runId);
+        } catch (cause) {
+          if (request === requestRef.current) setError(chatErrorMessage(cause));
+        }
       }
       await subscribeChatRun(run.runId, 0, controller.signal, (record) => {
         updateAssistant((message) => replayMessageEvent(message, record));
       });
     } catch (cause) {
-      if (!controller.signal.aborted) updateAssistant((message) => ({ ...message,
-        error: activeRunRef.current ? "连接中断，后台可能仍在执行。刷新当前会话可继续接收。" : chatErrorMessage(cause),
-        process: message.process ? { ...message.process, status: "interrupted", open: true } : undefined,
-      }));
+      if (!controller.signal.aborted)
+        updateAssistant((message) => ({
+          ...message,
+          error: activeRunRef.current
+            ? "连接中断，后台可能仍在执行。刷新当前会话可继续接收。"
+            : chatErrorMessage(cause),
+          process: message.process
+            ? { ...message.process, status: "interrupted", open: true }
+            : undefined,
+        }));
     } finally {
       if (request === requestRef.current) {
         controllerRef.current = null;
@@ -225,7 +283,11 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
 
   /** @param runId 已创建的尝试。取消失败不伪造已停止，保留订阅以接收真实状态。 */
   async function cancelRun(runId: string) {
-    await readChatJson(await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }));
+    await readChatJson(
+      await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: "POST",
+      }),
+    );
   }
 
   /** 主动停止写入服务端；切换或卸载仅断开订阅。 */
@@ -233,13 +295,18 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
     cancelRequestedRef.current = true;
     if (!activeRunRef.current) return;
     const request = requestRef.current;
-    try { await cancelRun(activeRunRef.current); }
-    catch (cause) { if (request === requestRef.current) setError(chatErrorMessage(cause)); }
+    try {
+      await cancelRun(activeRunRef.current);
+    } catch (cause) {
+      if (request === requestRef.current) setError(chatErrorMessage(cause));
+    }
   }
 
   /** @param runId 旧尝试，使用已保存的原问题创建新 Run。 */
   async function retry(runId: string) {
-    const user = session.messages.find((message) => message.runId === runId && message.role === "user");
+    const user = session.messages.find(
+      (message) => message.runId === runId && message.role === "user",
+    );
     if (user) await submitQuestion(user.content, runId);
   }
 

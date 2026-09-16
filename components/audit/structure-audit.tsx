@@ -1,7 +1,9 @@
-/** 修改时间：2026-09-16 | 文件说明：结构审计报告、覆盖范围、规则筛选与原文入口 | edit by：Sliye */
+/** 修改时间：2026-09-16 | 文件说明：持久工作区右侧的结构审计报告、筛选与原文入口 | edit by：Sliye */
 "use client";
 import Link from "next/link";
 import { useState } from "react";
+import { ClipboardCheckIcon, LoaderCircleIcon, RefreshCwIcon, ScanSearchIcon } from "lucide-react";
+import { WorkspacePageHeader } from "@/components/workspace/workspace-page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,77 +44,68 @@ export function StructureAudit() {
       (finding) => filter === "all" || finding.kind === filter,
     ) ?? [];
   return (
-    <main className="min-h-dvh bg-background text-foreground">
-      <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-5 py-5">
-          <div>
-            <h1 className="text-xl font-semibold">知识库结构审计</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              检查链接、附件和重复文件，保留依据与原文位置。
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button asChild variant="outline">
-              <Link href="/library">知识库</Link>
-            </Button>
-            <Button asChild variant="ghost">
-              <Link href="/chat">返回聊天</Link>
-            </Button>
-          </div>
-        </div>
-      </header>
-      <div className="mx-auto max-w-5xl space-y-5 px-5 py-7">
-        <div className="flex flex-wrap items-center gap-2">
+    <main className="min-h-full bg-background text-foreground">
+      <WorkspacePageHeader
+        title="知识库结构审计"
+        description="检查链接、附件和重复文件，保留依据与原文位置。"
+        icon={ClipboardCheckIcon}
+      />
+      <div className="mx-auto max-w-6xl space-y-6 px-4 pb-10 sm:px-8">
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-muted/40 p-4">
           <Button
+            className="rounded-lg"
             disabled={loading}
             onClick={() => {
               setSelection(null);
               void refresh(true);
             }}
           >
-            重新检查
+            <ScanSearchIcon aria-hidden="true" className="size-4" />重新检查
           </Button>
           <Button
             disabled={loading}
             variant="outline"
+            className="rounded-lg bg-background"
             onClick={() => {
               setSelection(null);
               void refresh();
             }}
           >
-            刷新报告
+            <RefreshCwIcon aria-hidden="true" className="size-4" />刷新报告
           </Button>
           {loading && (
             <Button variant="ghost" onClick={cancel}>
               取消等待
             </Button>
           )}
-          <span className="text-sm text-muted-foreground">
+          <span className="w-full text-xs leading-relaxed text-muted-foreground xl:ml-auto xl:w-auto">
             导入后自动检查 · 不修改原文件 · 不调用模型
           </span>
         </div>
         {loading && (
-          <p role="status" className="text-sm">
+          <p role="status" className="flex items-center gap-2 rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground">
+            <LoaderCircleIcon aria-hidden="true" className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
             正在读取或检查当前知识库，请稍候…
           </p>
         )}
         {error && (
           <p
             role="alert"
-            className="rounded-lg border border-destructive/40 p-4 text-sm text-destructive"
+            className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
           >
             {error}
           </p>
         )}
         {!loading && data && !report && (
-          <Card>
-            <CardContent className="py-6">
-              <p>
+          <Card className="rounded-2xl ring-border [--card-spacing:--spacing(5)]">
+            <CardContent className="py-8 text-center">
+              <ClipboardCheckIcon aria-hidden="true" className="mx-auto mb-4 size-7 text-muted-foreground" />
+              <p className="mx-auto max-w-lg text-sm leading-relaxed text-muted-foreground">
                 {data.snapshotId
                   ? "当前快照尚无可用报告。自动检查可能正在执行或未成功，请刷新报告或重新检查。"
                   : "知识库还没有已发布资料，请先导入文件。"}
               </p>
-              <Button asChild variant="link">
+              <Button asChild variant="outline" className="mt-5 rounded-lg">
                 <Link href="/library">前往知识库</Link>
               </Button>
             </CardContent>
@@ -120,7 +113,7 @@ export function StructureAudit() {
         )}
         {report && (
           <>
-            <Card>
+            <Card className="rounded-2xl ring-border [--card-spacing:--spacing(5)]">
               <CardHeader>
                 <div className="flex flex-wrap items-center gap-3">
                   <CardTitle>检查结果 · {report.findings.length} 项</CardTitle>
@@ -135,26 +128,37 @@ export function StructureAudit() {
                   </Badge>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <p>
-                  文件 {report.coverage.checkedFiles} /{" "}
-                  {report.coverage.totalFiles} · 已读文本{" "}
-                  {report.coverage.textFiles} · 本地引用{" "}
-                  {report.coverage.checkedLinks} · 近重复比较{" "}
-                  {report.coverage.comparedPairs} 对
-                </p>
-                <p className="break-all text-muted-foreground">
+              <CardContent className="space-y-4 text-sm leading-relaxed">
+                <dl className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                  <div className="rounded-xl bg-muted/50 p-4">
+                    <dt className="text-xs text-muted-foreground">已检查文件</dt>
+                    <dd className="mt-2 text-2xl font-semibold tabular-nums">{report.coverage.checkedFiles}<span className="text-sm font-normal text-muted-foreground"> / {report.coverage.totalFiles}</span></dd>
+                  </div>
+                  <div className="rounded-xl bg-muted/50 p-4">
+                    <dt className="text-xs text-muted-foreground">已读文本</dt>
+                    <dd className="mt-2 text-2xl font-semibold tabular-nums">{report.coverage.textFiles}</dd>
+                  </div>
+                  <div className="rounded-xl bg-muted/50 p-4">
+                    <dt className="text-xs text-muted-foreground">本地引用</dt>
+                    <dd className="mt-2 text-2xl font-semibold tabular-nums">{report.coverage.checkedLinks}</dd>
+                  </div>
+                  <div className="rounded-xl bg-muted/50 p-4">
+                    <dt className="text-xs text-muted-foreground">近重复比较</dt>
+                    <dd className="mt-2 text-2xl font-semibold tabular-nums">{report.coverage.comparedPairs}<span className="text-sm font-normal text-muted-foreground"> 对</span></dd>
+                  </div>
+                </dl>
+                <p className="break-all text-xs text-muted-foreground">
                   {new Date(report.checkedAt).toLocaleString("zh-CN")} · 快照{" "}
                   {report.snapshotId} · 规则 {report.ruleVersion}
                 </p>
-                <p className="text-muted-foreground">
+                <p className="border-t pt-4 text-xs leading-relaxed text-muted-foreground">
                   链接检查覆盖普通 Markdown/Wikilink、标题和 Block
                   ID；完全重复检查全部已检查文件，近重复仅比较 MD/TXT。外部链接{" "}
                   {report.coverage.externalLinks} 处未联网检查；Office/PDF
                   内部链接、复杂 Markdown 扩展和语义冲突不在本次范围。
                 </p>
                 {report.coverage.limitations.length > 0 && (
-                  <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                  <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
                     {report.coverage.limitations.map((item) => (
                       <li key={item}>{item}</li>
                     ))}
@@ -163,9 +167,9 @@ export function StructureAudit() {
               </CardContent>
             </Card>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="font-medium">待核对的问题</h2>
+              <h2 className="flex items-center gap-2 text-sm font-semibold">待核对的问题<Badge variant="secondary" className="tabular-nums">{findings.length}</Badge></h2>
               <Select value={filter} onValueChange={setFilter}>
-                <SelectTrigger aria-label="筛选审计问题" className="w-48">
+                <SelectTrigger aria-label="筛选审计问题" className="w-full rounded-lg bg-card sm:w-48">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -179,15 +183,15 @@ export function StructureAudit() {
               </Select>
             </div>
             {!findings.length && (
-              <p className="rounded-lg border p-5 text-sm text-muted-foreground">
+              <p role="status" className="rounded-2xl border border-dashed bg-muted/30 px-5 py-10 text-center text-sm leading-relaxed text-muted-foreground">
                 {report.findings.length
                   ? "当前筛选没有匹配项。"
                   : "在本次已覆盖范围内未发现问题；这不代表整个原 Vault 或所有语法均已验证。"}
               </p>
             )}
             {findings.map((finding) => (
-              <Card key={finding.id}>
-                <CardHeader className="pb-3">
+              <Card key={finding.id} className="min-w-0 rounded-2xl ring-border [--card-spacing:--spacing(5)]">
+                <CardHeader>
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle className="text-base">
                       {FINDING_LABELS[finding.kind]}
@@ -202,9 +206,9 @@ export function StructureAudit() {
                     </Badge>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 text-sm">
+                <CardContent className="space-y-3 break-words text-sm leading-relaxed">
                   {finding.target && (
-                    <p className="break-all font-mono">
+                    <p className="rounded-lg bg-muted/50 px-3 py-2 break-all font-mono text-xs">
                       目标：{finding.target}
                     </p>
                   )}
@@ -213,13 +217,13 @@ export function StructureAudit() {
                     建议：{finding.suggestion}{" "}
                     {finding.requiresConfirmation && "需人工确认。"}
                   </p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 border-t pt-3">
                     {finding.sources.map((source) => (
                       <Button
                         key={`${source.fileVersionId}:${source.line}`}
                         variant="outline"
                         size="sm"
-                        className="h-auto max-w-full whitespace-normal break-all py-2 text-left"
+                        className="h-auto max-w-full justify-start rounded-lg whitespace-normal break-all py-2 text-left text-xs"
                         onClick={() =>
                           setSelection({
                             snapshotId: report.snapshotId,

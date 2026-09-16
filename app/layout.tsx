@@ -1,10 +1,11 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent 全局页面布局与主题入口 | edit by：Sliye
+ * 修改时间：2026-09-16 | 文件说明：VaultAgent 全局主题与持久工作区布局入口 | edit by：Sliye
  */
 
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { WorkspaceShell } from "@/components/workspace/workspace-shell";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -34,7 +35,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <TooltipProvider>{children}</TooltipProvider>
+        <TooltipProvider><WorkspaceShell>{children}</WorkspaceShell></TooltipProvider>
       </body>
     </html>
   );
