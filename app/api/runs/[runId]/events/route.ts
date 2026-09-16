@@ -1,9 +1,9 @@
 /**
- * 修改时间：2026-09-07 | 文件说明：VaultAgent D3 Run 事件 SSE 补齐 API | edit by：Sliye
+ * 修改时间：2026-09-16 | 文件说明：受会话访问范围约束的 Run 事件补齐 API | edit by：Sliye
  */
 
 import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
-import { getRunEvents } from "@/lib/chat/runs";
+import { getRunEvents } from "@/lib/chat/run-store";
 
 export const runtime = "nodejs";
 
@@ -25,6 +25,7 @@ export async function GET(
   const afterValue = Number(new URL(request.url).searchParams.get("after") ?? "0");
   const afterSequence = Number.isSafeInteger(afterValue) && afterValue >= 0 ? afterValue : 0;
   const events = await getRunEvents(runId, afterSequence);
+  if (!events) return Response.json({ error: "Run not found." }, { status: 404 });
   const body = events
     .map((event) => `event: replay\ndata: ${JSON.stringify(event)}\n\n`)
     .join("");

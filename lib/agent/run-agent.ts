@@ -14,6 +14,7 @@
 import { gateway, hasToolCall, stepCountIs, ToolLoopAgent } from "ai";
 import { createVaultTools } from "@/lib/agent/tools";
 import type { VaultRunState } from "@/lib/agent/run-state";
+import { describeConversationContext } from "@/lib/chat/conversation-context";
 
 /** D9 最多执行六个模型步骤，避免工具循环无限延长
  * 一个步骤可以理解成：模型收到当前上下文，生成一次回复或工具调用决定
@@ -24,13 +25,15 @@ export const MAX_AGENT_OUTPUT_TOKENS = 1_200;
 /** D1 已真实验证的主问答模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
 
-/** 为当前 Run 组装工具和说明，不将任何私有正文直接放入系统提示。 */
-export function createVaultRunAgent(state: VaultRunState) {
+/** @param state 本轮快照与工具预算。 @param historyTruncated 较早对话是否因预算省略。 */
+export function createVaultRunAgent(state: VaultRunState, historyTruncated: boolean) {
   /** 两个阶段共用的行为与证据边界，切换职责时始终保留
    * 始终生效得基础规则 
    */
   const baseInstructions = [
       "你是 VaultAgent，帮助用户了解和使用自己的知识库。",
+      // 告诉模型怎样试用历史对话
+      describeConversationContext(historyTruncated),
       "依据当前问题和实际提供的会话上下文，按需使用可用工具；工具的用途和参数以各自定义为准。",
       "普通交流、一般知识及无需补充资料的任务可以直接回答；涉及用户知识库的事实必须有本轮工具实际返回的证据支持，不超出证据范围，不将一般知识称为用户资料中的结论。",
       state.snapshotId //根据有没有已发布快照，给模型提供不同的事实背景

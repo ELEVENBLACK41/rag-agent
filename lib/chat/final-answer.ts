@@ -7,6 +7,7 @@ import type { ReadableSource, SourceCitation } from "@/lib/sources/types";
 import type { PublicAnswerDraft } from "@/lib/chat/public-draft";
 import type { FileInventory } from "@/lib/sources/file-inventory";
 import { z } from "zod";
+import { describeConversationContext } from "@/lib/chat/conversation-context";
 
 /** 正文与来源列表分离；来源 ID 仅用于服务端生成底部卡片，不嵌入 Markdown。 */
 export const finalAnswerSchema = z.object({
@@ -24,6 +25,8 @@ type FinalAnswerContext = {
   publicDraft: PublicAnswerDraft;
   /** 独立于正文引用的数据库元数据；空值表示本轮未成功查询文件清单。 */
   fileInventory: FileInventory | null;
+  /** 历史仅供承接问题，不将旧回答当作当前证据。 */
+  historyTruncated: boolean;
 };
 
 /**
@@ -39,6 +42,7 @@ export function buildFinalInstruction(context: FinalAnswerContext) {
     : "本轮没有可引用的正文来源，citationIds 必须为空数组。文件清单中的名称、格式、数量和空清单结论可直接回答；缺少正文证据时如实说明，不编造文件内容。answer 内不写引用编号、引用标记或来源列表。";
   return [
     "你是 VaultAgent，按输出 Schema 返回 answer 和 citationIds 两个字段。先生成 answer 正文，再给出独立来源列表；answer 是面向用户的最终回答。",
+    describeConversationContext(context.historyTruncated),
     "问候、致谢、能力介绍以及未涉及个人资料的普通知识允许直接回答；涉及用户知识库的事实只能依据以下已读取正文证据或文件清单元数据。",
     "fileInventory 是服务端重新查询的当前快照文件元数据，只支持文件名、相对路径、格式和总数，不证明正文内容；文件清单不是正文引用来源，不为它生成引用标记。同名文件使用相对路径区分，不自行合并。",
     "fileInventory 非空时，文件总数以 totalCount 为准，complete 表示提供的清单是否覆盖全部文件。只列出 files 中的条目；complete 为 false 或因篇幅省略条目时，必须说明总数与本次仅展示部分，不得称为完整清单。范围仅为本轮已发布快照中未删除、已索引的文件，不代表尚未发布的导入或电脑中的所有文件。",

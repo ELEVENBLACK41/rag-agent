@@ -1,9 +1,14 @@
 /**
- * 修改时间：2026-09-14 | 文件说明：VaultAgent D9 受限多步问答 SSE API | edit by：Sliye
+ * 修改时间：2026-09-16 | 文件说明：会话内多轮问答 SSE 入口与请求校验 | edit by：Sliye
  */
 
 import { canAccessD3LocalFeature } from "@/lib/auth/preview-import";
-import { createChatRun, executeChatRun } from "@/lib/chat/runs";
+import { createChatRun } from "@/lib/chat/run-store";
+import { executeChatRun } from "@/lib/chat/runs";
+import { z } from "zod";
+
+/** 入口一次解析请求，后续仅传递已校验的问题与会话标识。 */
+const chatRequestSchema = z.object({ question: z.string().trim().min(1).max(4_000), conversationId: z.string().min(1).max(64).nullish() });
 
 export const runtime = "nodejs";
 /** D9 多步工具链的 SSE 连接上限，仍低于 Hobby 函数的单次执行限制。 */
@@ -33,36 +38,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const question =
-    typeof payload === "object" && payload
-      ? (payload as { question?: unknown }).question
-      : null;
-  const requestedConversationId =
-    typeof payload === "object" && payload
-      ? (payload as { conversationId?: unknown }).conversationId
-      : null;
-  const conversationId = requestedConversationId ?? null;
-  if (
-    typeof question !== "string" ||
-    !question.trim() ||
-    question.length > 4_000
-  ) {
-    return Response.json(
-      { error: "Question must be between 1 and 4,000 characters." },
-      { status: 400 },
-    );
-  }
-  if (conversationId !== null && typeof conversationId !== "string") {
-    return Response.json(
-      { error: "conversationId must be a string when provided." },
-      { status: 400 },
-    );
-  }
+  const parsed = chatRequestSchema.safeParse(payload);
+  if (!parsed.success) return Response.json({ error: "问题须为 1 至 4000 字，会话标识必须有效。" }, { status: 400 });
+  const { question, conversationId } = parsed.data;
 
   try {
     //调用核心逻辑 创建单轮Run
     const chatRun = await createChatRun(
-      question.trim(),
+      question,
       conversationId ?? undefined,
     );
     const encoder = new TextEncoder();
@@ -78,7 +61,7 @@ export async function POST(request: Request) {
 
         try {
           send("run", chatRun);
-          for await (const event of executeChatRun(chatRun, question.trim())) {
+          for await (const event of executeChatRun(chatRun, question)) {
             send(event.type, event.data);
           }
         } catch (error) {

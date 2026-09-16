@@ -1,147 +1,44 @@
-/**
- * 修改时间：2026-09-16
- * 文件说明：VaultAgent D9 受限多步问答 Run 与事件持久化。
- *
- * 此文件固定一次问答的资料快照、公开阶段事件和最终回答；Agent 只负责受限证据
- * 收集；未调用工具时直接保存 Agent 回答，调用工具后由独立生成器输出最终答案。
- *
- * edit by：Sliye
- */
-
-import { randomUUID } from "node:crypto";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+/** 修改时间：2026-09-16 | 文件说明：多步问答执行、证据交接与最终答案流式生成
+ * 
+ *  服务端执行编排层，同时也是服务端事件流的生产者
+ * 
+ *  | edit by：Sliye */
 import { gateway, Output, parsePartialJson, streamText } from "ai";
 import { createVaultRunAgent } from "@/lib/agent/run-agent";
 import { createVaultRunState } from "@/lib/agent/run-state";
 import { selectAnswerCitations } from "@/lib/chat/citations";
-import { buildFinalInstruction, finalAnswerSchema } from "@/lib/chat/final-answer";
+import {
+  buildFinalInstruction,
+  finalAnswerSchema,
+} from "@/lib/chat/final-answer";
 import { createPublicAnswerDraft } from "@/lib/chat/public-draft";
-import { getDatabase } from "@/lib/db/client";
-import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
-import { ensureLocalPrincipal, LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
-import { getLatestPublishedSnapshot } from "@/lib/retrieval/search";
+import { loadConversationContext } from "@/lib/chat/conversation-context";
+import {
+  appendRunEvent,
+  completeChatRun,
+  failChatRun,
+} from "@/lib/chat/run-store";
 import { readSnapshotSources } from "@/lib/sources/reader";
 import { readFileInventory } from "@/lib/sources/file-inventory";
-import type { SourceCitation } from "@/lib/sources/types";
+import type {
+  ChatRun,
+  ChatStageUpdate,
+  ChatStreamEvent,
+  ChatToolActivity,
+} from "@/lib/chat/types";
 /** Agent 与最终回答共同使用的已验证主模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
 /** 最终回答输出上限，避免上下文与费用无界增长。 */
 const MAX_OUTPUT_TOKENS = 1_200;
-/** 文本增量写入事件库的最短时间窗口，避免逐 token 写库。 */
+/** 文本增量写入事件库的最短时间窗口，毫秒。 */
 const EVENT_FLUSH_INTERVAL_MS = 300;
-/** 同一 Node 执行内串行化同一 Run 的事件写入，避免流式写库占用相同 sequence。 */
-const pendingEventWrites = new Map<string, Promise<void>>();
-
-/** 给前端展示的引用信息，引用必须来自 Agent 实际读取的证据。 */
-export type ChatCitation = SourceCitation;
-
-/** 公开的工具活动摘要，不包含模型参数、来源正文或私密思维。 */
-export type ChatToolActivity = {
-  toolCallId: string;
-  toolName: string;
-  status: "started" | "completed" | "failed";
-  message: string;
-};
-
-/** 公开阶段文本的流式更新；stageId 用于前端把同一段增量合并为一行。 */
-export type ChatStageUpdate = {
-  stageId: string;
-  delta: string;
-  status: "active" | "complete";
-};
-
-// 一次问答执行的身份信息
-export type ChatRun = {
-  conversationId: string;
-  runId: string;
-  snapshotId: string | null; //本次问答固定的快照；空库允许普通交流
-};
-// 推送给浏览器的事件类型
-export type ChatStreamEvent =
-  | { type: "stage"; data: ChatStageUpdate }
-  | { type: "tool"; data: ChatToolActivity }
-  | { type: "delta"; data: { text: string; provisional?: boolean } } // 未确定是否调用工具的文字也实时展示
-  | { type: "answer-stage"; data: { stages: ChatStageUpdate[] } }
-  | { type: "complete"; data: { citations: ChatCitation[] } }; //完成事件，包含引用信息
-
-/**
- * 创建单轮问答 Run，开始后始终固定在当前已发布快照上。
- *
- * @param question 已校验的用户问题。
- * @param conversationId 可选的既有会话标识；未提供时创建新会话。
- */
-export async function createChatRun(question: string, conversationId?: string): Promise<ChatRun> {
-  await ensureLocalPrincipal();
-  const snapshot = await getLatestPublishedSnapshot(LOCAL_WORKSPACE_ID);
-
-  const db = getDatabase();
-  const runId = randomUUID();
-  //如果前端传了 conversationId 就使用前端传的，如果没有就生成一个新的就是新绘画
-  const resolvedConversationId = conversationId ?? randomUUID();
-
-  //验证会话是否有效，验证会话ID是否存在，是否属于当前工作区，是否未被删除
-  if (conversationId) {
-    const [conversation] = await db
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.id, conversationId),
-          eq(conversations.workspaceId, LOCAL_WORKSPACE_ID),
-          isNull(conversations.deletedAt),
-        ),
-      )
-      .limit(1);
-    if (!conversation) throw new Error("目标会话不存在或已经删除。");
-  }
-
-  //使用事务同时写入四类数据
-  await db.transaction(async (transaction) => {
-    //如果没有传入 conversationId 就创建一个新的会话
-    if (!conversationId) {
-      await transaction.insert(conversations).values({
-        id: resolvedConversationId,
-        workspaceId: LOCAL_WORKSPACE_ID,
-        title: makeConversationTitle(question),//标题通过问题直接生成 暂时这样 后续可能会接入一个模型生成
-      });
-    }
-    //创建运行记录
-    await transaction.insert(runs).values({
-      id: runId,
-      conversationId: resolvedConversationId,
-      snapshotId: snapshot?.id ?? null,
-      status: "running",
-    });
-
-    //保存用户消息
-    await transaction.insert(messages).values({
-      id: randomUUID(),
-      conversationId: resolvedConversationId,
-      runId,
-      role: "user",
-      content: question,
-      status: "completed",
-      citations: [],
-    });
-    //写入开始事件
-    await transaction.insert(runEvents).values({
-      id: randomUUID(),
-      runId,
-      sequence: 1,
-      eventType: "run_started",
-      payload: { message: "正在处理问题" },
-    });
-  });
-
-  return { conversationId: resolvedConversationId, runId, snapshotId: snapshot?.id ?? null };
-}
 
 /**
  * 未调用工具时直接完成回答；调用工具后执行受限证据收集与独立最终生成。
  *
  * @param chatRun 已持久化的单轮问答 Run。
  * @param question 已保存的用户问题。
- * 
+ *
  * async function* 很关键，它是一个异步生成器，可以不断的产生事件返回给前端
  * yield 阶段消息
  * yield 文本片段增量
@@ -154,14 +51,18 @@ export async function* executeChatRun(
 ): AsyncGenerator<ChatStreamEvent> {
   try {
     const state = createVaultRunState(chatRun.snapshotId, {
-      onRetrievalTrace: (trace) => appendRunEvent(
-        chatRun.runId,
-        "retrieval_trace",
-        trace,
-      ),
+      onRetrievalTrace: (trace) =>
+        appendRunEvent(chatRun.runId, "retrieval_trace", trace),
     });
-    const agent = createVaultRunAgent(state);
-    const agentResult = await agent.stream({ prompt: question });
+    /** 两个模型阶段共享相同的最近完整对话，本轮问题只追加一次。 */
+    const context = await loadConversationContext(chatRun, question);
+    const agent = createVaultRunAgent(state, context.truncated);
+    /** context.messages大概是
+     * { role: "user", content: "上一个问题" },
+     * { role: "assistant", content: "上一个回答" },
+     * { role: "user", content: "当前问题" },
+     */
+    const agentResult = await agent.stream({ messages: context.messages });
     const toolInputStreams = new Map<
       string,
       { json: string; briefing: string }
@@ -179,12 +80,18 @@ export async function* executeChatRun(
     /** 无证据且工具失败时仍保留异常，不能把服务故障包装成普通无答案。 */
     let hasToolError = false;
 
-    // fullStream 同时提供模型文本和工具参数增量；只发布公开文本，不读取 reasoning。
-    for await (const part of agentResult.fullStream) {
-      if (!hasUsedTools && (part.type === "tool-input-start" || part.type === "tool-call")) {
+    // stream 同时提供模型文本和工具参数增量；只发布公开文本，不读取 reasoning。
+    for await (const part of agentResult.stream) {
+      if (
+        !hasUsedTools &&
+        (part.type === "tool-input-start" || part.type === "tool-call")
+      ) {
         hasUsedTools = true;
         if (pendingInitialText) {
-          await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText, format: "plain" });
+          await appendRunEvent(chatRun.runId, "provisional_delta", {
+            text: pendingInitialText,
+            format: "plain",
+          });
           pendingInitialText = "";
         }
         // 空 stages 只清空工具调用前的临时正文；后续公开文本单独发布为阶段事件。
@@ -209,7 +116,10 @@ export async function* executeChatRun(
           }
           pendingInitialText += delta;
           if (Date.now() - lastInitialFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
-            await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText, format: "plain" });
+            await appendRunEvent(chatRun.runId, "provisional_delta", {
+              text: pendingInitialText,
+              format: "plain",
+            });
             pendingInitialText = "";
             lastInitialFlushAt = Date.now();
           }
@@ -245,7 +155,11 @@ export async function* executeChatRun(
       if (part.type === "tool-call") {
         const briefing = getPublicBriefing(part.input);
         if (part.toolName === "finish_research" && briefing) {
-          publicDraft.append(`finish:${part.toolCallId}`, "finish-summary", briefing);
+          publicDraft.append(
+            `finish:${part.toolCallId}`,
+            "finish-summary",
+            briefing,
+          );
         }
         if (briefing) {
           const inputStream = toolInputStreams.get(part.toolCallId);
@@ -269,9 +183,14 @@ export async function* executeChatRun(
         });
       }
       if (part.type === "tool-result") {
-        if ((part.toolName === "search_notes" || part.toolName === "find_related") &&
-            part.output !== null && typeof part.output === "object" &&
-            "status" in part.output && part.output.status === "searched") {
+        if (
+          (part.toolName === "search_notes" ||
+            part.toolName === "find_related") &&
+          part.output !== null &&
+          typeof part.output === "object" &&
+          "status" in part.output &&
+          part.output.status === "searched"
+        ) {
           hasSearched = true;
         }
         yield await createToolEvent(chatRun.runId, {
@@ -298,7 +217,10 @@ export async function* executeChatRun(
       if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
       // 正文已经逐增量发送，只保存尾部事件和完成状态，不再重发全文。
       if (pendingInitialText) {
-        await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText, format: "plain" });
+        await appendRunEvent(chatRun.runId, "provisional_delta", {
+          text: pendingInitialText,
+          format: "plain",
+        });
       }
       await completeChatRun(chatRun, answer, []);
       yield { type: "complete", data: { citations: [] } };
@@ -308,18 +230,20 @@ export async function* executeChatRun(
     const citations = state.getCitations();
     /** 文件元数据是独立证据，不要求先读取正文；按成功查询过的页重新授权。 */
     const fileListOffsets = state.getFileListOffsets();
-    const fileInventory = chatRun.snapshotId && fileListOffsets.length
-      ? await readFileInventory(chatRun.snapshotId, fileListOffsets)
-      : null;
+    const fileInventory =
+      chatRun.snapshotId && fileListOffsets.length
+        ? await readFileInventory(chatRun.snapshotId, fileListOffsets)
+        : null;
     if (!citations.length && !fileInventory && hasToolError) {
       throw new Error("知识库工具执行失败，未能取得可用证据，请稍后重试。");
     }
-    const sources = citations.length && chatRun.snapshotId
-      ? await readSnapshotSources(
-          chatRun.snapshotId,
-          citations.map((citation) => citation.chunkId),
-        )
-      : [];
+    const sources =
+      citations.length && chatRun.snapshotId
+        ? await readSnapshotSources(
+            chatRun.snapshotId,
+            citations.map((citation) => citation.chunkId),
+          )
+        : [];
     if (sources.length !== citations.length) {
       throw new Error("Agent 已读取的部分证据当前不可用。");
     }
@@ -332,16 +256,22 @@ export async function* executeChatRun(
     const finalResult = streamText({
       model: gateway(CHAT_MODEL),
       system: buildFinalInstruction({
-        sources, citations, hasSearched, hasToolError,
+        sources,
+        citations,
+        hasSearched,
+        hasToolError,
         publicDraft: publicDraft.getDraft(),
         fileInventory,
+        historyTruncated: context.truncated,
       }),
-      prompt: question,
+      messages: context.messages,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       reasoning: "none",
       // 官方：https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data；正文与来源采用独立字段。
       output: Output.object({ schema: finalAnswerSchema }),
-      onError: ({ error }) => { finalStreamError = error; },
+      onError: ({ error }) => {
+        finalStreamError = error;
+      },
     });
 
     let answer = "";
@@ -350,23 +280,29 @@ export async function* executeChatRun(
     // SDK 负责流式 JSON 解析；正文增量事件只传 answer，不传 JSON 或 citationIds。
     for await (const partial of finalResult.partialOutputStream) {
       if (typeof partial.answer !== "string") continue;
-      if (!partial.answer.startsWith(answer)) throw new Error("回答流发生不一致，请重新提问。");
+      if (!partial.answer.startsWith(answer))
+        throw new Error("回答流发生不一致，请重新提问。");
       const textDelta = partial.answer.slice(answer.length);
       if (!textDelta) continue;
       answer = partial.answer;
       pendingEventText += textDelta;
       yield { type: "delta", data: { text: textDelta } };
       if (Date.now() - lastEventFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
-        await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText, format: "plain" });
+        await appendRunEvent(chatRun.runId, "final_delta", {
+          text: pendingEventText,
+          format: "plain",
+        });
         pendingEventText = "";
         lastEventFlushAt = Date.now();
       }
     }
     if (finalStreamError !== undefined) throw finalStreamError;
     const output = await finalResult.output;
-    if (await finalResult.finishReason === "length") throw new Error("回答生成达到长度上限，请缩小问题范围后重试。");
+    if ((await finalResult.finishReason) === "length")
+      throw new Error("回答生成达到长度上限，请缩小问题范围后重试。");
     // 完整对象通过 Schema 校验后补齐 SDK 未推送的尾部；不重新生成或拼接另一份答案。
-    if (!output.answer.startsWith(answer)) throw new Error("回答流发生不一致，请重新提问。");
+    if (!output.answer.startsWith(answer))
+      throw new Error("回答流发生不一致，请重新提问。");
     const remaining = output.answer.slice(answer.length);
     if (remaining) {
       answer = output.answer;
@@ -374,74 +310,43 @@ export async function* executeChatRun(
       yield { type: "delta", data: { text: remaining } };
     }
     if (pendingEventText) {
-      await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText, format: "plain" });
+      await appendRunEvent(chatRun.runId, "final_delta", {
+        text: pendingEventText,
+        format: "plain",
+      });
     }
     if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
     // 生成期间可能删除文件；清单发生变化时不能把已过期内容保存为成功回答。
     if (fileInventory && chatRun.snapshotId) {
-      const available = await readFileInventory(chatRun.snapshotId, fileListOffsets);
+      const available = await readFileInventory(
+        chatRun.snapshotId,
+        fileListOffsets,
+      );
       if (JSON.stringify(available) !== JSON.stringify(fileInventory)) {
         throw new Error("回答期间知识库文件清单已变化，请重新提问。");
       }
     }
-    const answerCitations = selectAnswerCitations(output.citationIds, citations);
+    const answerCitations = selectAnswerCitations(
+      output.citationIds,
+      citations,
+    );
     // 输出期间资料也可能被删除，发布前再次校验实际引用的来源。
     if (answerCitations.length && chatRun.snapshotId) {
-      const available = await readSnapshotSources(chatRun.snapshotId, answerCitations.map((citation) => citation.chunkId));
-      if (available.length !== answerCitations.length) throw new Error("回答引用的部分来源已不可用，请重新提问。");
+      const available = await readSnapshotSources(
+        chatRun.snapshotId,
+        answerCitations.map((citation) => citation.chunkId),
+      );
+      if (available.length !== answerCitations.length)
+        throw new Error("回答引用的部分来源已不可用，请重新提问。");
     }
     await completeChatRun(chatRun, answer, answerCitations);
     yield { type: "complete", data: { citations: answerCitations } };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "知识问答执行失败。";
+    const message =
+      error instanceof Error ? error.message : "知识问答执行失败。";
     await failChatRun(chatRun.runId, message);
     throw error;
   }
-}
-
-/**
- * 按序读取已持久化事件，供断线后的 SSE 补齐接口使用。
- *
- * @param runId Run 标识。
- * @param afterSequence 已在浏览器确认的最后事件序号。
- */
-export async function getRunEvents(runId: string, afterSequence: number) {
-  return getDatabase()
-    .select({
-      sequence: runEvents.sequence,
-      eventType: runEvents.eventType,
-      payload: runEvents.payload,
-      createdAt: runEvents.createdAt,
-    })
-    .from(runEvents)
-    .where(and(eq(runEvents.runId, runId), gt(runEvents.sequence, afterSequence)))
-    .orderBy(runEvents.sequence);
-}
-
-/**
- * 软删除会话，不会删除其对应的知识库文件。
- *
- * @param conversationId 会话标识。
- */
-export async function deleteConversation(conversationId: string) {
-  const result = await getDatabase()
-    .update(conversations)
-    .set({ deletedAt: new Date() })
-    .where(
-      and(
-        eq(conversations.id, conversationId),
-        eq(conversations.workspaceId, LOCAL_WORKSPACE_ID),
-        isNull(conversations.deletedAt),
-      ),
-    )
-    .returning({ id: conversations.id });
-
-  return result.length > 0;
-}
-
-/** 以首条问题生成 D3 会话标题，避免额外模型调用。 */
-function makeConversationTitle(question: string) {
-  return question.replace(/\s+/g, " ").trim().slice(0, 60);
 }
 
 /** 创建公开阶段增量；增量只发往当前 SSE，完整文本在阶段结束时统一持久化。 */
@@ -468,44 +373,6 @@ async function completeStage(
 async function getPartialBriefing(json: string) {
   const { value } = await parsePartialJson(json);
   return getPublicBriefing(value, false) ?? "";
-}
-
-/**
- * 按单 Run 的单调序号写入事件。
- *
- * 单轮流式生成与检索 Trace 都会写入事件，因此在当前执行器中串行化 sequence 分配。
- * D10 的跨进程恢复会补充持久执行租约和数据库级并发处理。
- */
-async function appendRunEvent(runId: string, eventType: string, payload: object) {
-  const previousWrite = pendingEventWrites.get(runId) ?? Promise.resolve();
-  const write = previousWrite
-    .catch(() => undefined)
-    .then(() => writeRunEvent(runId, eventType, payload));
-  pendingEventWrites.set(runId, write);
-  try {
-    await write;
-  } finally {
-    if (pendingEventWrites.get(runId) === write) pendingEventWrites.delete(runId);
-  }
-}
-
-/** 在已串行化的上下文中查询并分配下一个事件序号。 */
-async function writeRunEvent(runId: string, eventType: string, payload: object) {
-  const db = getDatabase();
-  const [lastEvent] = await db
-    .select({ sequence: runEvents.sequence })
-    .from(runEvents)
-    .where(eq(runEvents.runId, runId))
-    .orderBy(desc(runEvents.sequence))
-    .limit(1);
-
-  await db.insert(runEvents).values({
-    id: randomUUID(),
-    runId,
-    sequence: (lastEvent?.sequence ?? 0) + 1,
-    eventType,
-    payload,
-  });
 }
 
 /** 创建、持久化并发布一条脱敏工具活动。 */
@@ -546,65 +413,4 @@ function describeToolActivity(
   if (status === "started") return `${label}…`;
   if (status === "completed") return `${label}完成`;
   return `${label}未完成`;
-}
-
-/** 同一事务提交最终回答、Run 终态与完成事件，避免刷新后出现双重完成。 */
-async function completeChatRun(chatRun: ChatRun, answer: string, citations: ChatCitation[]) {
-  const db = getDatabase();
-  await db.transaction(async (transaction) => {
-    const [lastEvent] = await transaction
-      .select({ sequence: runEvents.sequence })
-      .from(runEvents)
-      .where(eq(runEvents.runId, chatRun.runId))
-      .orderBy(desc(runEvents.sequence))
-      .limit(1);
-  //保存助手消息
-    await transaction.insert(messages).values({
-      id: randomUUID(),
-      conversationId: chatRun.conversationId,
-      runId: chatRun.runId,
-      role: "assistant",
-      content: answer,
-      status: "completed",
-      citations,
-    });
-  //更新run得状态
-    await transaction
-      .update(runs)
-      .set({ status: "completed", completedAt: new Date() })
-      .where(eq(runs.id, chatRun.runId));
-  //写入完成事件
-    await transaction.insert(runEvents).values({
-      id: randomUUID(),
-      runId: chatRun.runId,
-      sequence: (lastEvent?.sequence ?? 0) + 1,
-      eventType: "run_completed",
-      payload: { citations },
-    });
-  });
-}
-
-/** 保存失败终态与安全错误消息，保留此前已验证的事件。 */
-async function failChatRun(runId: string, message: string) {
-  const db = getDatabase();
-  await db.transaction(async (transaction) => {
-    const [lastEvent] = await transaction
-      .select({ sequence: runEvents.sequence })
-      .from(runEvents)
-      .where(eq(runEvents.runId, runId))
-      .orderBy(desc(runEvents.sequence))
-      .limit(1);
-
-    await transaction
-      .update(runs)
-      .set({ status: "failed", completedAt: new Date() })
-      .where(eq(runs.id, runId));
-    await transaction.insert(runEvents).values({
-      id: randomUUID(),
-      runId,
-      sequence: (lastEvent?.sequence ?? 0) + 1,
-      eventType: "run_failed",
-      payload: { message: message.slice(0, 500) },
-    });
-  });
 }

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 单次 Run 的公开执行过程折叠面板。
  * edit by：Sliye
  */
@@ -17,27 +17,7 @@ import {
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 
-export type RunProcessEvent =
-  | {
-      id: string;
-      kind: "stage";
-      message: string;
-      status: "active" | "complete";
-    }
-  | {
-      id: string;
-      kind: "tool";
-      message: string;
-      status: "started" | "completed" | "failed";
-    };
-
-export type RunProcessState = {
-  status: "running" | "completed" | "failed";
-  startedAt: number;
-  completedAt?: number;
-  open: boolean;
-  events: RunProcessEvent[];
-};
+import type { RunProcessEvent, RunProcessState } from "@/lib/chat/types";
 
 type RunProcessProps = {
   process: RunProcessState;
@@ -63,7 +43,7 @@ export function RunProcess({ process, onOpenChange }: RunProcessProps) {
             <div className="pl-6" key={event.id}>
               <MessageResponse
                 className="text-sm leading-6 text-foreground"
-                isAnimating={true}
+                isAnimating={process.status === "running" && event.status === "active"}
               >
                 {event.message}
               </MessageResponse>
@@ -73,7 +53,7 @@ export function RunProcess({ process, onOpenChange }: RunProcessProps) {
               icon={getToolIcon(event.status)}
               key={event.id}
               label={
-                event.status === "started" ? (
+                event.status === "started" && process.status === "running" ? (
                   <Shimmer
                     as="span"
                     className="text-sm"
@@ -115,6 +95,7 @@ function useElapsedSeconds(process: RunProcessState) {
 function getProcessLabel(status: RunProcessState["status"], elapsedSeconds: number) {
   const duration = formatDuration(elapsedSeconds);
   if (status === "running") return `正在执行 · 已用时 ${duration}`;
+  if (status === "interrupted") return "未完成 · 状态待确认";
   if (status === "failed") return `执行失败 · 用时 ${duration}`;
   return `用时 ${duration}`;
 }

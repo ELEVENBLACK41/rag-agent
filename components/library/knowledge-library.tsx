@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent 独立知识库管理工作区。
  * edit by：Sliye
  */
@@ -38,7 +38,7 @@ export function KnowledgeLibrary() {
             </div>
           </div>
           <Button asChild variant="outline">
-            <Link href="/"><ArrowLeftIcon className="size-4" /> 返回聊天</Link>
+            <Link href="/chat"><ArrowLeftIcon className="size-4" /> 返回聊天</Link>
           </Button>
         </div>
       </header>
