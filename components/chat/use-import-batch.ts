@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent 知识库清单、导入批次状态与轮询 Hook。
  *
  * Hook 只管理浏览器上传、轮询和删除后的视图状态；服务端返回的诊断与视觉
@@ -21,6 +21,8 @@ export type ImportFileState = {
   byteSize?: number;
   updatedAt?: string;
   isActiveVersion?: boolean;
+  /** 服务端根据版本索引状态与文档格式判定，附件不能冒充可检索文档。 */
+  isQueryable?: boolean;
   diagnostics: Array<{
     severity: "warning";
     stage: "parse";

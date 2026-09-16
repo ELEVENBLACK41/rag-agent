@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-15
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent 多文件导入批次、版本与候选快照发布。
  *
  * 此模块是文件版本、批次状态和快照原子切换的业务事实来源；格式解析与视觉
@@ -262,6 +262,8 @@ export async function getCurrentLibraryFiles() {
       versionNumber: fileVersions.versionNumber,
       byteSize: fileVersions.byteSize,
       updatedAt: fileVersions.createdAt,
+      fileVersionId: fileVersions.id,
+      indexStatus: fileVersions.status,
     })
     .from(indexSnapshotFiles)
     .innerJoin(fileVersions, eq(indexSnapshotFiles.fileVersionId, fileVersions.id))
@@ -301,6 +303,8 @@ export async function getCurrentLibraryFiles() {
       versionNumber: file.versionNumber,
       byteSize: file.byteSize,
       updatedAt: file.updatedAt,
+      fileVersionId: file.fileVersionId,
+      isQueryable: file.indexStatus === "indexed" && isIndexableMediaType(file.mediaType),
       isActiveVersion: true as const,
       diagnostics: [],
       visualAssets: [],

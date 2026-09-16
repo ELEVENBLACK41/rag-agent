@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-16
+ * 修改时间：2026-09-17
  * 文件说明：持久工作区右侧的知识库管理内容。
  * edit by：Sliye
  */
@@ -27,14 +27,14 @@ export function KnowledgeLibrary() {
     <main className="min-h-full bg-background text-foreground">
       <WorkspacePageHeader
         title="知识库管理"
-        description="集中管理你的资料，查看文件版本与 AI 检索范围。"
+        description="管理已建立索引、可供 AI 查询的文档；图片请在左侧「图片附件」查看。"
         icon={DatabaseIcon}
       />
       <section aria-label="知识库文件管理" className="mx-auto max-w-6xl px-4 pb-10 sm:px-8">
         <ImportPanel
           batch={batch}
           error={error}
-          files={library?.files ?? []}
+          files={library?.files.filter((file) => file.isQueryable) ?? []}
           isLoading={isLoading}
           isUploading={isUploading}
           onRemoveFile={removeFile}

@@ -47,7 +47,7 @@ export function StructureAudit() {
     <main className="min-h-full bg-background text-foreground">
       <WorkspacePageHeader
         title="知识库结构审计"
-        description="检查链接、附件和重复文件，保留依据与原文位置。"
+        description="检查链接、附件和重复文件，保留依据与原文位置"
         icon={ClipboardCheckIcon}
       />
       <div className="mx-auto max-w-6xl space-y-6 px-4 pb-10 sm:px-8">
@@ -79,7 +79,7 @@ export function StructureAudit() {
             </Button>
           )}
           <span className="w-full text-xs leading-relaxed text-muted-foreground xl:ml-auto xl:w-auto">
-            导入后自动检查 · 不修改原文件 · 不调用模型
+            导入后自动检查
           </span>
         </div>
         {loading && (

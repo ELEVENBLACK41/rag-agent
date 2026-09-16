@@ -1,7 +1,7 @@
-/** 修改时间：2026-09-16 | 文件说明：跨页面复用的工作区导航、当前入口与会话目录展示 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：跨页面复用的工作区导航、当前入口与会话目录展示 | edit by：Sliye */
 "use client";
 import Link from "next/link";
-import { BookOpenIcon, SquarePenIcon, RefreshCwIcon, ListChecksIcon } from "lucide-react";
+import { BookOpenIcon, SquarePenIcon, RefreshCwIcon, ListChecksIcon, ImagesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { useConversationDirectory } from "@/components/chat/use-conversation-directory";
@@ -43,6 +43,9 @@ export function ConversationSidebar({
           <BookOpenIcon className="size-4" />
           管理知识库
         </Link>
+      </Button>
+      <Button asChild variant={activePath === "/attachments" ? "secondary" : "ghost"} className="h-10 justify-start gap-3 rounded-xl px-3">
+        <Link href="/attachments" aria-current={activePath === "/attachments" ? "page" : undefined} onClick={onNavigate}><ImagesIcon className="size-4" />图片附件</Link>
       </Button>
       <Button asChild variant={activePath === "/audit" ? "secondary" : "ghost"} className="h-10 justify-start gap-3 rounded-xl px-3">
         <Link href="/audit" aria-current={activePath === "/audit" ? "page" : undefined} onClick={onNavigate}><ListChecksIcon className="size-4" />结构审计</Link>
