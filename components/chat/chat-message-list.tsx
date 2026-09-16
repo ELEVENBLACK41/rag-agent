@@ -13,7 +13,7 @@ import {
 } from "@/components/ai-elements/message";
 import { RunProcess } from "@/components/chat/run-process";
 import { Button } from "@/components/ui/button";
-import { FileTextIcon, MessageSquareIcon } from "lucide-react";
+import { FileTextIcon } from "lucide-react";
 import { getVisibleAnswer } from "@/lib/chat/citations";
 import type { ChatMessage } from "@/lib/chat/types";
 import type { SourceCitation as Citation } from "@/lib/sources/types";
@@ -40,7 +40,7 @@ export function ChatMessageList({
 }: ChatMessageListProps) {
   return (
     <Conversation className="min-h-0 flex-1">
-      <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-5 py-8">
+      <ConversationContent className="mx-auto w-full max-w-[50rem] gap-9 px-5 pb-10 pt-6 sm:gap-12 sm:px-6">
         {history.hasMore && (
           <Button
             variant="ghost"
@@ -52,8 +52,8 @@ export function ChatMessageList({
         )}
         {!messages.length ? (
           <ConversationEmptyState
-            title="开始你的知识库对话"
-            icon={<MessageSquareIcon className="size-10" />}
+            className="min-h-[45dvh] [&_h3]:text-2xl [&_h3]:font-semibold [&_h3]:tracking-tight [&_p]:mt-3 [&_p]:leading-7 sm:[&_h3]:text-3xl"
+            title="今天想了解什么？"
             description={
               hasPublishedSnapshot
                 ? "可以直接交流，也可以围绕资料连续追问。"
@@ -62,7 +62,7 @@ export function ChatMessageList({
           />
         ) : (
           messages.map((message) => (
-            <Message from={message.role} key={message.id}>
+            <Message from={message.role} key={message.id} className="max-w-full gap-3">
               {message.role === "assistant" && message.process && (
                 <RunProcess
                   process={message.process}
@@ -70,9 +70,10 @@ export function ChatMessageList({
                 />
               )}
               {(message.role === "user" || message.content) && (
-                <MessageContent>
+                <MessageContent className="text-base leading-7 group-[.is-user]:max-w-[85%] group-[.is-user]:whitespace-pre-wrap group-[.is-user]:rounded-3xl group-[.is-user]:bg-chat-user group-[.is-user]:px-5 group-[.is-user]:py-2.5 group-[.is-user]:text-chat-user-foreground group-[.is-assistant]:w-full">
                   {message.role === "assistant" ? (
                     <MessageResponse
+                      className="chat-response"
                       isAnimating={
                         streaming && message.id === messages.at(-1)?.id
                       }
@@ -115,7 +116,7 @@ export function ChatMessageList({
                   </p>
                   {message.citations.map((citation) => (
                     <Button
-                      className="h-6 gap-1 px-2 text-xs"
+                      className="h-auto max-w-full gap-1.5 rounded-full border-border/60 bg-muted/50 px-3 py-1 text-xs font-normal text-muted-foreground shadow-none hover:text-foreground"
                       disabled={!message.runId}
                       key={citation.id}
                       onClick={() => onCitation(message, citation)}
@@ -124,7 +125,7 @@ export function ChatMessageList({
                       variant="outline"
                     >
                       <FileTextIcon className="size-3" />
-                      {citation.displayName} · {getCitationLocation(citation)}
+                      <span className="min-w-0 truncate">{citation.displayName} · {getCitationLocation(citation)}</span>
                     </Button>
                   ))}
                 </div>

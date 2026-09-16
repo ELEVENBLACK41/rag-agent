@@ -1,5 +1,6 @@
 /** 修改时间：2026-09-16 | 文件说明：聊天输入、提交与停止生成按钮 | edit by：Sliye */
 "use client";
+import { ArrowUpIcon } from "lucide-react";
 import {
   PromptInput,
   PromptInputSubmit,
@@ -25,22 +26,26 @@ export function ChatComposer({
   onStop,
 }: ChatComposerProps) {
   return (
-    <div className="border-t border-border bg-card px-5 py-4">
-      <div className="mx-auto w-full max-w-3xl">
-        <PromptInput onSubmit={({ text }) => onSubmit(text)}>
+    <div className="shrink-0 bg-background px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
+      <div className="mx-auto w-full max-w-[47rem]">
+        <PromptInput className="chat-composer" onSubmit={({ text }) => onSubmit(text)}>
           <PromptInputTextarea
             aria-label="聊天消息"
+            className="min-h-12 py-3.5 pl-5 pr-2 text-base leading-6 md:text-base"
             disabled={disabled || streaming}
             value={value}
             onChange={(event) => onChange(event.currentTarget.value)}
-            placeholder="问问你的资料，或继续追问…"
+            placeholder="向 VaultAgent 提问"
           />
           <PromptInputSubmit
+            className="mr-2 mb-2 size-9 shrink-0 self-end rounded-full"
             aria-label={streaming ? "停止生成" : "发送消息"}
             disabled={!streaming && (disabled || !value.trim())}
             onStop={onStop}
             status={streaming ? "streaming" : "ready"}
-          />
+          >
+            {streaming ? undefined : <ArrowUpIcon className="size-5" />}
+          </PromptInputSubmit>
         </PromptInput>
       </div>
     </div>

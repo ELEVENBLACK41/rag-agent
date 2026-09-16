@@ -30,11 +30,11 @@ export function RunProcess({ process, onOpenChange }: RunProcessProps) {
 
   return (
     <ChainOfThought
-      className="border-b border-border pb-4"
+      className="space-y-2"
       onOpenChange={onOpenChange}
       open={process.open}
     >
-      <ChainOfThoughtHeader className="[&>svg:first-child]:hidden">
+      <ChainOfThoughtHeader className="w-fit rounded-md py-1 text-xs focus-visible:outline-2 focus-visible:outline-ring [&>svg:first-child]:hidden [&>svg:last-child]:size-3.5">
         {getProcessLabel(process.status, elapsedSeconds)}
       </ChainOfThoughtHeader>
       <ChainOfThoughtContent className="space-y-4 pt-2">

@@ -54,23 +54,23 @@ export function VaultWorkspace({
 
   return (
     <main className="flex h-dvh overflow-hidden bg-background text-foreground">
-      <aside className="hidden w-72 shrink-0 border-r border-border bg-card lg:block">
+      <aside className="hidden w-64 shrink-0 bg-sidebar lg:block">
         {sidebar}
       </aside>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <header className="flex h-16 shrink-0 items-center gap-3 px-4 sm:px-6">
           <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
             <SheetTrigger asChild>
               <Button
                 className="lg:hidden"
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 aria-label="打开历史会话"
               >
                 <MenuIcon className="size-4" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="flex flex-col p-0">
+            <SheetContent side="left" className="flex w-72 flex-col bg-sidebar p-0">
               <SheetHeader className="sr-only">
                 <SheetTitle>历史会话</SheetTitle>
               </SheetHeader>
@@ -78,10 +78,7 @@ export function VaultWorkspace({
             </SheetContent>
           </Sheet>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate font-semibold">{chat.title}</h1>
-            <p className="text-sm text-muted-foreground">
-              连续问答 · 历史会话 · 来源定位
-            </p>
+            <h1 className="truncate text-base font-medium text-muted-foreground">{chat.title}</h1>
           </div>
           {chat.id && (
             <>
@@ -91,17 +88,19 @@ export function VaultWorkspace({
                 size="icon"
                 variant="ghost"
                 aria-label="刷新当前会话"
+                title="刷新当前会话"
               >
                 <RefreshCwIcon className="size-4" />
               </Button>
               <Button
                 disabled={busy}
                 onClick={() => void chat.removeConversation()}
-                size="sm"
+                size="icon"
                 variant="ghost"
+                aria-label="删除会话"
+                title="删除会话"
               >
                 <Trash2Icon className="size-4" />
-                <span className="hidden sm:inline">删除会话</span>
               </Button>
             </>
           )}
