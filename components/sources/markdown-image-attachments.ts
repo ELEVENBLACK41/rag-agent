@@ -24,6 +24,25 @@ export function createMarkdownImageAttachments(attachmentUrl: string) {
     tagNames: [...sanitize[1].tagNames, "mark"],
     attributes: { ...sanitize[1].attributes, mark: ["dataVaultagentColor"] },
   }] as typeof defaultRehypePlugins.sanitize;
+  /** 相对文件名在默认 harden 中会被丢弃，因此先转换，再沿用完整安全过滤。
+   * Streamdown 按插件名与序列化参数缓存处理器，地址必须显式作为参数，不能只放在闭包中。
+   */
+  const rehypePlugins: StreamdownProps["rehypePlugins"] = [
+    defaultRehypePlugins.raw,
+    sourceSanitize,
+    [rewriteMarkdownImages, { attachmentUrl }],
+    defaultRehypePlugins.harden,
+  ];
+  /** 只允许本组件构造的附件接口成为图片地址；远程图片不直接请求。 */
+  const urlTransform: UrlTransform = (url, key, node) => {
+    if (key !== "src") return defaultUrlTransform(url, key, node);
+    return url.startsWith(`${attachmentUrl}?path=`) ? url : null;
+  };
+  return { rehypePlugins, urlTransform };
+}
+
+/** @param options 当前引用的附件接口，参与处理器缓存键，避免不同 Run/Chunk 复用旧地址。 */
+function rewriteMarkdownImages({ attachmentUrl }: { attachmentUrl: string }) {
   /** 地址来自 Markdown URL，解码一次后作为查询参数编码；服务端不再进行路径解码。 */
   function rewriteImages(node: ImageTreeNode) {
     if (node.tagName === "img" && node.properties) {
@@ -45,17 +64,5 @@ export function createMarkdownImageAttachments(attachmentUrl: string) {
     node.children?.forEach(rewriteImages);
   }
 
-  /** 相对文件名在默认 harden 中会被丢弃，因此先转换，再沿用完整安全过滤。 */
-  const rehypePlugins: StreamdownProps["rehypePlugins"] = [
-    defaultRehypePlugins.raw,
-    sourceSanitize,
-    () => rewriteImages,
-    defaultRehypePlugins.harden,
-  ];
-  /** 只允许本组件构造的附件接口成为图片地址；远程图片不直接请求。 */
-  const urlTransform: UrlTransform = (url, key, node) => {
-    if (key !== "src") return defaultUrlTransform(url, key, node);
-    return url.startsWith(`${attachmentUrl}?path=`) ? url : null;
-  };
-  return { rehypePlugins, urlTransform };
+  return rewriteImages;
 }

@@ -29,7 +29,7 @@ import {
 export function createVaultTools(state: VaultRunState, assertActive: () => Promise<void>) {
   return {
     list_files: tool({
-      description: "列出当前已发布知识库快照的文件名、相对路径、格式和文件总数。回答有哪些文件、有多少文件时优先使用；仅列文件无需搜索或读取正文，不能凭文件名推断内容。总数以返回值为准，每页最多 30 个；用户要求完整清单且 nextOffset 非空时，在预算内继续翻页，未读全须说明仅列出部分。",
+      description: "列出当前已发布知识库快照的文件名、相对路径、格式和文件总数，不返回正文。仅回答有哪些文件、有多少文件时使用；若目标是介绍或概括文件，清单只能确定文件身份，之后仍须 search_notes 搜索并 read_sources 读取正文。已从上下文明确目标文件时可直接搜索，不必重复列清单。总数以返回值为准，每页最多 30 个；完整清单且 nextOffset 非空时在预算内继续翻页，未读全须说明范围。",
       inputSchema: z.object({
         briefing: z.string().trim().min(1).max(200)
           .describe("公开阶段说明：准备查询文件清单或继续列取下一页，1 至 2 句"),
@@ -50,7 +50,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
       },
     }),
     search_notes: tool({
-      description: "在当前知识库快照中搜索与问题相关的内容候选。需要文档事实或证据时使用；问候、致谢无需调用，也不能用搜索结果代替完整文件清单。",
+      description: "在当前知识库快照中搜索正文候选。介绍、概括、解释文件内容时，用已明确的文件名/路径和当前问题构造查询；返回候选后须通过 read_sources 获取正文。历史未获取正文不表示本轮无需尝试。问候无需调用，搜索结果不能代替完整文件清单。",
       inputSchema: z.object({
         briefing: z.string().trim().min(1).max(200)
           .describe("展示给用户的公开阶段说明：准备搜索什么、为什么搜索，1 至 2 句，不写最终结论"),
@@ -143,7 +143,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
       },
     }),
     finish_research: tool({
-      description: "本次证据收集可以结束时调用，随后由独立生成器评估证据并回答。读取过资料并不代表资料足以回答问题；普通交流不要调用。",
+      description: "仅在本轮用户目标已有足够证据，或实际尝试后因无结果、工具失败、预算限制无法继续时交接最终生成。仅列文件时文件清单即可；介绍或概括内容时，只有清单、尚未尝试搜索/读取不能结束。读取过资料也不代表证据充分；普通交流不要调用。",
       inputSchema: z.object({
         briefing: z.string().trim().min(1).max(200)
           .describe("证据交接记录，1 至 2 句：只写原始问题已确认的范围及尚未解决的缺口；问题已解决就结束。不重复完整答案或文件清单，不建议额外查询，不写‘如需了解’、‘请提供’等邀请追问或服务收尾"),
