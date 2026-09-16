@@ -10,11 +10,11 @@
 
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
-import { gateway, parsePartialJson, streamText } from "ai";
+import { gateway, Output, parsePartialJson, streamText } from "ai";
 import { createVaultRunAgent } from "@/lib/agent/run-agent";
 import { createVaultRunState } from "@/lib/agent/run-state";
 import { selectAnswerCitations } from "@/lib/chat/citations";
-import { buildFinalInstruction } from "@/lib/chat/final-answer";
+import { buildFinalInstruction, finalAnswerSchema } from "@/lib/chat/final-answer";
 import { createPublicAnswerDraft } from "@/lib/chat/public-draft";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
@@ -184,7 +184,7 @@ export async function* executeChatRun(
       if (!hasUsedTools && (part.type === "tool-input-start" || part.type === "tool-call")) {
         hasUsedTools = true;
         if (pendingInitialText) {
-          await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
+          await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText, format: "plain" });
           pendingInitialText = "";
         }
         // 空 stages 只清空工具调用前的临时正文；后续公开文本单独发布为阶段事件。
@@ -209,7 +209,7 @@ export async function* executeChatRun(
           }
           pendingInitialText += delta;
           if (Date.now() - lastInitialFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
-            await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
+            await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText, format: "plain" });
             pendingInitialText = "";
             lastInitialFlushAt = Date.now();
           }
@@ -296,10 +296,9 @@ export async function* executeChatRun(
     if (!hasUsedTools) {
       const answer = [...textStreams.values()].join("");
       if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
-      selectAnswerCitations(answer, []);
       // 正文已经逐增量发送，只保存尾部事件和完成状态，不再重发全文。
       if (pendingInitialText) {
-        await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText });
+        await appendRunEvent(chatRun.runId, "provisional_delta", { text: pendingInitialText, format: "plain" });
       }
       await completeChatRun(chatRun, answer, []);
       yield { type: "complete", data: { citations: [] } };
@@ -328,6 +327,8 @@ export async function* executeChatRun(
       await appendRunEvent(chatRun.runId, "file_inventory", fileInventory);
     }
 
+    /** partialOutputStream 只提供对象增量；模型错误另行捕获，不能将半段答案保存为成功。 */
+    let finalStreamError: unknown;
     const finalResult = streamText({
       model: gateway(CHAT_MODEL),
       system: buildFinalInstruction({
@@ -338,29 +339,42 @@ export async function* executeChatRun(
       prompt: question,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       reasoning: "none",
+      // 官方：https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data；正文与来源采用独立字段。
+      output: Output.object({ schema: finalAnswerSchema }),
+      onError: ({ error }) => { finalStreamError = error; },
     });
 
     let answer = "";
     let pendingEventText = "";
     let lastEventFlushAt = Date.now();
-    // fullStream 显式处理部分输出后的模型错误，不能将截断回答保存为成功。
-    // 官方：https://ai-sdk.dev/docs/reference/ai-sdk-core/stream-text
-    for await (const part of finalResult.fullStream) {
-      if (part.type === "error") throw part.error;
-      if (part.type !== "text-delta") continue;
-      const textDelta = part.text;
-      answer += textDelta;
+    // SDK 负责流式 JSON 解析；正文增量事件只传 answer，不传 JSON 或 citationIds。
+    for await (const partial of finalResult.partialOutputStream) {
+      if (typeof partial.answer !== "string") continue;
+      if (!partial.answer.startsWith(answer)) throw new Error("回答流发生不一致，请重新提问。");
+      const textDelta = partial.answer.slice(answer.length);
+      if (!textDelta) continue;
+      answer = partial.answer;
       pendingEventText += textDelta;
       yield { type: "delta", data: { text: textDelta } };
       if (Date.now() - lastEventFlushAt >= EVENT_FLUSH_INTERVAL_MS) {
-        await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
+        await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText, format: "plain" });
         pendingEventText = "";
         lastEventFlushAt = Date.now();
       }
     }
-    //模型结束后补齐文本
+    if (finalStreamError !== undefined) throw finalStreamError;
+    const output = await finalResult.output;
+    if (await finalResult.finishReason === "length") throw new Error("回答生成达到长度上限，请缩小问题范围后重试。");
+    // 完整对象通过 Schema 校验后补齐 SDK 未推送的尾部；不重新生成或拼接另一份答案。
+    if (!output.answer.startsWith(answer)) throw new Error("回答流发生不一致，请重新提问。");
+    const remaining = output.answer.slice(answer.length);
+    if (remaining) {
+      answer = output.answer;
+      pendingEventText += remaining;
+      yield { type: "delta", data: { text: remaining } };
+    }
     if (pendingEventText) {
-      await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText });
+      await appendRunEvent(chatRun.runId, "final_delta", { text: pendingEventText, format: "plain" });
     }
     if (!answer.trim()) throw new Error("模型没有返回可保存的回答。");
     // 生成期间可能删除文件；清单发生变化时不能把已过期内容保存为成功回答。
@@ -370,7 +384,7 @@ export async function* executeChatRun(
         throw new Error("回答期间知识库文件清单已变化，请重新提问。");
       }
     }
-    const answerCitations = selectAnswerCitations(answer, citations);
+    const answerCitations = selectAnswerCitations(output.citationIds, citations);
     // 输出期间资料也可能被删除，发布前再次校验实际引用的来源。
     if (answerCitations.length && chatRun.snapshotId) {
       const available = await readSnapshotSources(chatRun.snapshotId, answerCitations.map((citation) => citation.chunkId));

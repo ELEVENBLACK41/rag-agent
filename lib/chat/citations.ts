@@ -1,22 +1,17 @@
 /**
- * 修改时间：2026-09-16 | 文件说明：回答引用的服务端筛选与流式、历史正文统一展示 | edit by：Sliye
+ * 修改时间：2026-09-16 | 文件说明：独立来源列表校验与旧版正文引用兼容展示 | edit by：Sliye
  */
 
 import type { SourceCitation } from "@/lib/sources/types";
 
 /**
- * 只发布正文实际使用且属于本轮已读取证据的编号；无效编号作为生成错误。
- * @param answer 保留内部【来源:编号】的完整回答。
+ * 校验独立来源字段，只发布模型声明使用且属于本轮已读取证据的来源。
+ * @param citationIds 已通过输出 Schema 校验的来源编号列表，不从正文提取。
  * @param sources 本轮固定快照内重新校验过的已读取来源。
  */
-export function selectAnswerCitations(answer: string, sources: SourceCitation[]) {
-  /** 专用引用标记必须闭合且编号为正整数；格式错误不能悄悄降级为无来源。 */
-  const markers = [...answer.matchAll(/【来源:([^】]*)】/g)];
-  if (/【来源:[^】]*$/.test(answer) || markers.some((match) => !/^[1-9]\d*$/.test(match[1]))) {
-    throw new Error("回答的来源标记格式无效，请重新提问。");
-  }
-  /** 去重后保留正文首次引用顺序。 */
-  const ids = new Set(markers.map((match) => Number(match[1])));
+export function selectAnswerCitations(citationIds: number[], sources: SourceCitation[]) {
+  /** 去重后保留模型在独立字段中提供的顺序。 */
+  const ids = new Set(citationIds);
   /** 来源编号只能由本轮读取过程分配。 */
   const byId = new Map(sources.map((source) => [source.id, source]));
   return [...ids].map((id) => {
@@ -27,8 +22,8 @@ export function selectAnswerCitations(answer: string, sources: SourceCitation[])
 }
 
 /**
- * 隐藏内部引用标记；流式尾部暂缓显示未闭合编号，避免逐 token 泄露。
- * @param content 累积的原始回答，持久化时仍保留内部编号。
+ * 仅供旧事件回放：隐藏历史正文中的引用标记，新版正文不经过此函数。
+ * @param content 旧版累积的原始回答，可能保留内部编号。
  * @param streaming 是否仍可能接收后续字符。
  * @param citations 历史回答的已发布引用，用于兼容旧的纯数字编号。
  */

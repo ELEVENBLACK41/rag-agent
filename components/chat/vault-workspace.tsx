@@ -45,6 +45,8 @@ type ChatMessage = {
   content: string;
   runId?: string;
   citations?: Citation[];
+  /** 只有旧版事件回放才解码正文内的历史引用，新正文保持原样。 */
+  legacyCitationMarkers?: boolean;
   process?: RunProcessState;
 };
 
@@ -174,6 +176,8 @@ export function VaultWorkspace({ hasPublishedSnapshot }: VaultWorkspaceProps) {
       throw new Error("无法补齐断线期间的任务事件。");
 
     let recoveredText = "";
+    /** 新事件显式声明纯正文；旧事件缺少格式字段时沿用历史展示规则。 */
+    let legacyCitationMarkers = false;
     await consumeSse(response.body, (event, data) => {
       if (event !== "replay") return;
       const replay = data as {
@@ -181,10 +185,13 @@ export function VaultWorkspace({ hasPublishedSnapshot }: VaultWorkspaceProps) {
         eventType: string;
         payload: Record<string, unknown>;
       };
-      if (replay.eventType === "final_delta" || replay.eventType === "provisional_delta")
+      if (replay.eventType === "final_delta" || replay.eventType === "provisional_delta") {
         recoveredText += String(replay.payload.text ?? "");
+        legacyCitationMarkers = replay.payload.format !== "plain";
+      }
       if (replay.eventType === "answer_to_stage") {
         recoveredText = "";
+        legacyCitationMarkers = false;
         moveAnswerToStages(assistantMessageId, replay.payload.stages as StageUpdate[]);
       }
       if (replay.eventType === "stage_message") {
@@ -213,7 +220,7 @@ export function VaultWorkspace({ hasPublishedSnapshot }: VaultWorkspaceProps) {
       }
       if (replay.eventType === "run_failed") failProcess(assistantMessageId);
     });
-    if (recoveredText) replaceAssistantText(assistantMessageId, recoveredText);
+    if (recoveredText) replaceAssistantText(assistantMessageId, recoveredText, legacyCitationMarkers);
   }
 
   /** 软删除当前会话，不会删除已导入的知识库文件。 */
@@ -286,13 +293,14 @@ export function VaultWorkspace({ hasPublishedSnapshot }: VaultWorkspaceProps) {
   }
 
   /** 使用断线补齐的完整内容替换临时助手消息，防止内容重复。 */
-  function replaceAssistantText(messageId: string, text: string) {
+  function replaceAssistantText(messageId: string, text: string, legacyCitationMarkers: boolean) {
     setMessages((current) =>
       current.map((item) =>
         item.id === messageId
           ? {
               ...item,
               content: text,
+              legacyCitationMarkers,
               process: item.process
                 ? finishProcess(item.process, false)
                 : item.process,
@@ -503,7 +511,9 @@ export function VaultWorkspace({ hasPublishedSnapshot }: VaultWorkspaceProps) {
                               isStreaming && message.id === messages.at(-1)?.id
                             }
                           >
-                            {getVisibleAnswer(message.content, isStreaming && message.id === messages.at(-1)?.id, message.citations)}
+                            {message.legacyCitationMarkers
+                              ? getVisibleAnswer(message.content, false, message.citations)
+                              : message.content}
                           </MessageResponse>
                         ) : (
                           message.content
