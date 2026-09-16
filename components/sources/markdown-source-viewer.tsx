@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-16
  * 文件说明：VaultAgent Obsidian Markdown 原文件 Viewer。
  *
  * 复用 Streamdown 的代码、CJK、数学和 Mermaid 能力；本地图片统一转换为同一 Run
@@ -16,7 +16,8 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import { Streamdown, defaultUrlTransform, type Components, type UrlTransform } from "streamdown";
+import { Streamdown, type Components } from "streamdown";
+import { createMarkdownImageAttachments } from "@/components/sources/markdown-image-attachments";
 import type { SourceHighlight } from "@/lib/sources/types";
 import { useSourceFileText } from "@/components/sources/use-source-file-text";
 
@@ -40,8 +41,8 @@ export function MarkdownSourceViewer({ attachmentUrl, fileUrl, highlight }: Mark
   const contentRef = useRef<HTMLDivElement>(null);
   // 完成一次规范化md文档
   const markdown = useMemo(() => content ? normalizeObsidianMarkdown(content) : "", [content]);
-  const urlTransform = useMemo<UrlTransform>(
-    () => createAttachmentUrlTransform(attachmentUrl),
+  const imageAttachments = useMemo(
+    () => createMarkdownImageAttachments(attachmentUrl),
     [attachmentUrl],
   );
 
@@ -68,7 +69,8 @@ export function MarkdownSourceViewer({ attachmentUrl, fileUrl, highlight }: Mark
         linkSafety={{ enabled: true }}
         mode="static"
         plugins={streamdownPlugins}
-        urlTransform={urlTransform}
+        rehypePlugins={imageAttachments.rehypePlugins}
+        urlTransform={imageAttachments.urlTransform}
       >
         {markdown}
       </Streamdown>
@@ -143,22 +145,6 @@ function replaceObsidianHighlights(value: string) {
       `<mark data-vaultagent-color="${encodeURIComponent("yellow")}">$1</mark>`,
     );
   }).join("");
-}
-
-/** 为每个 Markdown 图片路径生成同一 Run/Chunk 的服务端授权请求。 */
-function createAttachmentUrlTransform(attachmentUrl: string): UrlTransform {
-  return (url, key, node) => {
-    if (key !== "src") return defaultUrlTransform(url, key, node);
-    if (!isLocalAttachmentReference(url)) return null;
-    return `${attachmentUrl}?path=${encodeURIComponent(url)}`;
-  };
-}
-
-/** 远程、data、协议与绝对路径均不作为 Markdown 本地图片加载。 */
-function isLocalAttachmentReference(value: string) {
-  return Boolean(value) &&
-    !value.startsWith("/") &&
-    !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value);
 }
 
 /** 从引用行范围选择一个渲染后可匹配的短文本，不使用检索追加的标题上下文
