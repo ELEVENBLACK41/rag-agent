@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-14
+ * 修改时间：2026-09-18
  * 文件说明：VaultAgent DOCX 原文件的只读渲染与引用定位 Viewer。
  *
  * 浏览器只从当前 Run 的受鉴权地址读取原始字节。docx-preview 在组件销毁或切换
@@ -123,7 +123,11 @@ function highlightDocxImage(container: HTMLElement, imageIndex: number) {
   return true;
 }
 
-/** 在连续文本节点中寻找精确原文并生成可跨节点的 DOM Range。 */
+/**
+ * 在连续文本节点中寻找原文并生成可跨节点的 DOM Range。
+ * 先严格匹配；Word 的样式 Run、手动换行可能让解析文本与预览 DOM 的空白不同，
+ * 此时只忽略空白字符再匹配，避免无依据地改写标点或正文。
+ */
 function findTextRange(root: HTMLElement, quote: string) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
@@ -133,9 +137,18 @@ function findTextRange(root: HTMLElement, quote: string) {
     nodes.push(node as Text);
     documentText += node.textContent ?? "";
   }
-  const startOffset = documentText.indexOf(quote);
-  if (startOffset < 0) return null;
-  const endOffset = startOffset + quote.length;
+
+  const exactStartOffset = documentText.indexOf(quote);
+  if (exactStartOffset >= 0)
+    return createTextRange(nodes, exactStartOffset, exactStartOffset + quote.length);
+
+  const whitespaceInsensitive = findWhitespaceInsensitiveRange(documentText, quote);
+  if (!whitespaceInsensitive) return null;
+  return createTextRange(nodes, whitespaceInsensitive.startOffset, whitespaceInsensitive.endOffset);
+}
+
+/** 将连续文本中的绝对字符位置转换为跨 Text Node 的 DOM Range。 */
+function createTextRange(nodes: Text[], startOffset: number, endOffset: number) {
   let cursor = 0;
   let start: { node: Text; offset: number } | null = null;
   for (const textNode of nodes) {
@@ -151,6 +164,46 @@ function findTextRange(root: HTMLElement, quote: string) {
     cursor = nextCursor;
   }
   return null;
+}
+
+/**
+ * 忽略空白字符后寻找短引用，并保留原文偏移量以便创建准确 Range。
+ * @param documentText DOCX Viewer 实际渲染出的连续文本。
+ * @param quote 索引阶段保存的原始短引用。
+ */
+function findWhitespaceInsensitiveRange(documentText: string, quote: string) {
+  const normalizedQuote = removeWhitespace(quote);
+  if (!normalizedQuote) return null;
+
+  let normalizedDocument = "";
+  const documentOffsets: number[] = [];
+  for (let offset = 0; offset < documentText.length; offset += 1) {
+    const character = documentText[offset];
+    if (isDocxWhitespace(character)) continue;
+    normalizedDocument += character;
+    documentOffsets.push(offset);
+  }
+
+  const normalizedStart = normalizedDocument.indexOf(normalizedQuote);
+  if (normalizedStart < 0) return null;
+  const normalizedEnd = normalizedStart + normalizedQuote.length - 1;
+  return {
+    startOffset: documentOffsets[normalizedStart],
+    endOffset: documentOffsets[normalizedEnd] + 1,
+  };
+}
+
+/** Word Run 拆分时只忽略布局空白与零宽字符，不放宽正文和标点匹配。 */
+function removeWhitespace(value: string) {
+  let normalized = "";
+  for (const character of value) {
+    if (!isDocxWhitespace(character)) normalized += character;
+  }
+  return normalized;
+}
+
+function isDocxWhitespace(character: string) {
+  return /[\s\u200B\uFEFF]/u.test(character);
 }
 
 /** 用明确状态区分加载、定位失败和渲染失败，避免把“原文已打开”伪装成定位成功。 */

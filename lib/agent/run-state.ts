@@ -11,8 +11,8 @@
 import type { RetrievalTrace } from "@/lib/retrieval/types";
 import type { SourceCitation } from "@/lib/sources/types";
 
-/** 单次 D9 问答最多调用的只读工具次数，限制模型循环和费用。 */
-export const MAX_AGENT_TOOL_CALLS = 5;
+/** 单次问答最多调用的只读工具次数，为二次检索与证据核对预留空间。 */
+export const MAX_AGENT_TOOL_CALLS = 10;
 /** 搜索和关联检索共享上限，为读取证据保留调用空间。 */
 export const MAX_AGENT_SEARCH_CALLS = 5;
 /** 一次读取最多带回给模型的 Chunk 数。 */

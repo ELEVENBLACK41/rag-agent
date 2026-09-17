@@ -1,6 +1,6 @@
 /**
- * 修改时间：2026-09-17
- * 文件说明：VaultAgent 常规 DOCX 正文、标题与基础表格解析器。
+ * 修改时间：2026-09-18
+ * 文件说明：VaultAgent 常规 DOCX 正文、列表、标题与基础表格解析器。
  *
  * Mammoth 负责安全地读取 DOCX 容器并映射 Word 常见样式；本文件仅把稳定的
  * HTML 结构收敛为检索 Chunk 和文档内位置。复杂版式、批注、文本框和精确分页
@@ -46,7 +46,10 @@ export async function parseDocx(bytes: Uint8Array): Promise<ParsedDocument> {
   };
 }
 
-/** 按 Mammoth 的块级 HTML 输出顺序建立可引用的正文和表格块。 */
+/**
+ * 按 Mammoth 的块级 HTML 输出顺序建立可引用的正文和表格块。
+ * Word 自动编号、项目符号会被 Mammoth 转为 li；它们常用于论文目录，必须参与索引。
+ */
 function parseDocxHtml(html: string): ParsedTextChunk[] {
   const chunks: ParsedTextChunk[] = [];
   const headingStack: Array<{ level: number; text: string }> = [];
@@ -61,7 +64,7 @@ function parseDocxHtml(html: string): ParsedTextChunk[] {
   );
 
   for (const match of contentWithTableTokens.matchAll(
-    /<(h[1-6]|p|vaultagent-table)\b[^>]*>([\s\S]*?)<\/\1>/gi,
+    /<(h[1-6]|p|li|vaultagent-table)\b[^>]*>([\s\S]*?)<\/\1>/gi,
   )) {
     const tag = match[1].toLowerCase();
     const text = htmlToPlainText(match[2]);
