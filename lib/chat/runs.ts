@@ -14,7 +14,6 @@ import {
   finalAnswerSchema,
 } from "@/lib/chat/final-answer";
 import { createPublicAnswerDraft } from "@/lib/chat/public-draft";
-import { removeUntrustedImageMarkup } from "@/lib/chat/answer-content";
 import { loadConversationContext } from "@/lib/chat/conversation-context";
 import {
   appendRunEvent,
@@ -280,12 +279,7 @@ export async function* executeChatRun(
     answer = output.answer;
     yield { type: "delta", data: { text: remaining } };
   }
-  const safeAnswer = removeUntrustedImageMarkup(answer);
-  if (!safeAnswer) throw new ChatExecutionError("模型没有返回可保存的回答。");
-  if (safeAnswer !== answer) {
-    answer = safeAnswer;
-    yield { type: "replace-answer", data: { text: answer } };
-  }
+  if (!answer.trim()) throw new ChatExecutionError("模型没有返回可保存的回答。");
   // 生成期间可能删除文件；清单发生变化时不能把已过期内容保存为成功回答。
   if (fileInventory && chatRun.snapshotId) {
     const available = await readFileInventory(

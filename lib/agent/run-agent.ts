@@ -13,7 +13,10 @@
 
 import { gateway, hasToolCall, stepCountIs, ToolLoopAgent } from "ai";
 import { createVaultTools } from "@/lib/agent/tools";
-import { MAX_AGENT_TOOL_CALLS, type VaultRunState } from "@/lib/agent/run-state";
+import {
+  MAX_AGENT_TOOL_CALLS,
+  type VaultRunState,
+} from "@/lib/agent/run-state";
 import { MAX_WEB_SEARCH_CALLS } from "@/lib/agent/web-search";
 import { describeConversationContext } from "@/lib/chat/conversation-context";
 
@@ -80,7 +83,9 @@ export function createVaultRunAgent(
       stepCountIs(MAX_AGENT_STEPS),
       () => state.isToolBudgetExhausted(),
       // 原生搜索没有本地 execute；按 SDK 返回的真实调用在步骤边界计入总预算。
-      ({ steps }) => steps.reduce((count, step) => count + step.toolCalls.length, 0) >= MAX_AGENT_TOOL_CALLS,
+      ({ steps }) =>
+        steps.reduce((count, step) => count + step.toolCalls.length, 0) >=
+        MAX_AGENT_TOOL_CALLS,
     ], //什么时候停止 就是调用了finish_research，达到了最大步骤数，或者是工具预算耗尽
     maxRetries: 0,
     maxOutputTokens: MAX_AGENT_OUTPUT_TOKENS,
@@ -90,8 +95,11 @@ export function createVaultRunAgent(
     //instructions 可以覆盖当前步骤发送给模型的指令，而且覆盖结果会延续到后续步骤
     prepareStep: async ({ steps, initialMessages, responseMessages }) => {
       await assertActive();
-      if (!state.snapshotId && !webSearchEnabled) return { activeTools: [], toolChoice: "none" }; //空库且未授权联网时直接回答
-      const webSearchCalls = steps.flatMap((step) => step.toolCalls).filter((call) => call?.toolName === "search_web").length;
+      if (!state.snapshotId && !webSearchEnabled)
+        return { activeTools: [], toolChoice: "none" }; //空库且未授权联网时直接回答
+      const webSearchCalls = steps
+        .flatMap((step) => step.toolCalls)
+        .filter((call) => call?.toolName === "search_web").length;
       /** 调用过工具后要求继续收集或显式交接，避免直接生成另一份最终回答结束。 */
       const hasUsedTools = steps.some((step) => step.toolCalls.length > 0);
       return {
@@ -114,8 +122,12 @@ export function createVaultRunAgent(
         activeTools: [
           //动态开放工具
           ...(state.snapshotId ? ["list_files" as const] : []), //固定快照的文件清单，不依赖搜索候选
-          ...(state.snapshotId && state.canSearch() ? ["search_notes" as const] : []), //开放条件 搜索预算尚未耗尽
-          ...(webSearchEnabled && webSearchCalls < MAX_WEB_SEARCH_CALLS ? ["search_web" as const] : []),
+          ...(state.snapshotId && state.canSearch()
+            ? ["search_notes" as const]
+            : []), //开放条件 搜索预算尚未耗尽
+          ...(webSearchEnabled && webSearchCalls < MAX_WEB_SEARCH_CALLS
+            ? ["search_web" as const]
+            : []),
           ...(state.getPermittedChunkCount() ? ["read_sources" as const] : []), //开放条件 已经有搜索候选
           ...(state.getPermittedChunkCount() && state.canSearch()
             ? ["find_related" as const]
