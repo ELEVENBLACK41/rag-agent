@@ -16,6 +16,7 @@ export function KnowledgeLibrary() {
   const {
     batch,
     error,
+    importProgress,
     isLoading,
     isUploading,
     library,
@@ -35,6 +36,7 @@ export function KnowledgeLibrary() {
           batch={batch}
           error={error}
           files={library?.files.filter((file) => file.isQueryable) ?? []}
+          importProgress={importProgress}
           isLoading={isLoading}
           isUploading={isUploading}
           onRemoveFile={removeFile}

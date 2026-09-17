@@ -46,14 +46,23 @@ export type KnowledgeLibraryState = {
 export type ImportBatchState = {
   id: string;
   status: "queued" | "running" | "completed" | "failed";
+  progressPercent: number;
+  progressStage:
+    | "queued"
+    | "parsing"
+    | "visualizing"
+    | "embedding"
+    | "finalizing"
+    | "completed"
+    | "failed";
   errorMessage: string | null;
   files: ImportFileState[];
 };
 
-/** D4 导入批次状态轮询的最长次数。 */
-const MAX_IMPORT_STATUS_CHECKS = 180;
-/** D4 导入批次状态轮询间隔，单位：毫秒。 */
-const IMPORT_STATUS_INTERVAL_MS = 1_000;
+/** 最长等待 30 分钟，覆盖已开放的批量视觉识别任务。 */
+const MAX_IMPORT_STATUS_CHECKS = 900;
+/** 导入批次状态轮询间隔，单位：毫秒；阶段进度无需高频查询。 */
+const IMPORT_STATUS_INTERVAL_MS = 2_000;
 
 /** 处理多文件/ZIP 上传、批次轮询和单个逻辑文件删除。 */
 export function useImportBatch() {
@@ -61,6 +70,8 @@ export function useImportBatch() {
   const [library, setLibrary] = useState<KnowledgeLibraryState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  /** 从浏览器上传到快照发布的整体导入进度。 */
+  const [importProgress, setImportProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /** 从服务端重新读取当前已发布快照，避免把浏览器内存当作知识库事实来源。 */
@@ -99,21 +110,22 @@ export function useImportBatch() {
   async function upload(files: File[]) {
     if (!files.length || isUploading) return;
     setError(null);
+    setBatch(null);
     setIsUploading(true);
+    setImportProgress(0);
     const formData = new FormData();
     files.forEach((file) => formData.append("files", file));
     formData.set("paths", JSON.stringify(files.map((file) => getRelativePath(file))));
 
     try {
-      const response = await fetch("/api/imports", { method: "POST", body: formData });
-      const result = (await response.json()) as { batchId?: string; error?: string };
-      if (!response.ok || !result.batchId) throw new Error(result.error ?? "无法创建导入任务。");
+      const result = await requestImportBatch(formData, setImportProgress);
       await waitForBatch(result.batchId);
       await refreshLibrary();
     } catch (uploadError) {
       setError(toErrorMessage(uploadError));
     } finally {
       setIsUploading(false);
+      setImportProgress(null);
     }
   }
 
@@ -136,6 +148,7 @@ export function useImportBatch() {
       const result = (await response.json()) as ImportBatchState & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "无法读取导入状态。");
       setBatch(result);
+      setImportProgress(result.progressPercent);
       if (result.status === "completed") return;
       if (result.status === "failed") throw new Error(result.errorMessage ?? "导入失败。");
     }
@@ -151,7 +164,45 @@ export function useImportBatch() {
     removeFile,
     refreshLibrary,
     upload,
+    importProgress,
   };
+}
+
+/**
+ * 通过 XMLHttpRequest 上传文件，以便读取浏览器提供的真实发送字节进度。
+ *
+ * @param formData 已包含文件与相对路径的表单数据。
+ * @param onProgress 接收整体进度的上传区间 0 到 10。
+ */
+function requestImportBatch(
+  formData: FormData,
+  onProgress: (value: number) => void,
+) {
+  return new Promise<{ batchId: string }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/imports");
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.min(9, Math.round((event.loaded / event.total) * 10)));
+    });
+    request.addEventListener("load", () => {
+      const result = request.response as { batchId?: string; error?: string } | null;
+      if (request.status < 200 || request.status >= 300 || !result?.batchId) {
+        reject(new Error(result?.error ?? "无法创建导入任务。"));
+        return;
+      }
+      onProgress(10);
+      resolve({ batchId: result.batchId });
+    });
+    request.addEventListener("error", () =>
+      reject(new Error("文件上传失败，请检查网络后重试。")),
+    );
+    request.addEventListener("abort", () =>
+      reject(new Error("文件上传已取消。")),
+    );
+    request.send(formData);
+  });
 }
 
 /** 请求当前已发布知识库清单；状态写入由调用方决定。 */

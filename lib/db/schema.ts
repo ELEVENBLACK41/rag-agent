@@ -123,6 +123,12 @@ export const importBatches = pgTable(
       .references(() => indexSnapshots.id, { onDelete: "cascade" }),
     workflowRunId: varchar("workflow_run_id", { length: 255 }),
     status: varchar("status", { length: 16 }).notNull(),
+    /** 整批导入从浏览器上传到快照发布的真实完成百分比。 */
+    progressPercent: integer("progress_percent").default(0).notNull(),
+    /** 当前正在执行的导入阶段，供刷新后的客户端继续展示。 */
+    progressStage: varchar("progress_stage", { length: 24 })
+      .default("queued")
+      .notNull(),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),

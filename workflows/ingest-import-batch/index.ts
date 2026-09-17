@@ -34,35 +34,60 @@ export async function ingestImportBatchWorkflow(batchId: string) {
   let embeddedChunkCount = 0;
   try {
     /**
-     * 第一个step 
+     * 第一个step
      * 批次：queued → running
      * 可索引文件：queued → running
      * 附件：保持 ready
-     * 
+     *
      * */
     await startBatchImport(batchId);
     //找出本批需要处理得文件，按 MIME 类型筛选
     const indexableImports = await listBatchIndexableImports(batchId);
+    /** 可索引文件共同占整体进度的 10%–90%，每个文件按三个真实阶段推进。 */
+    const progressPerFile = indexableImports.length
+      ? 80 / indexableImports.length
+      : 0;
     //这个循环为捉个文件处理，串行处理
-    for (const indexableImport of indexableImports) {
+    for (
+      let fileIndex = 0;
+      fileIndex < indexableImports.length;
+      fileIndex += 1
+    ) {
+      const indexableImport = indexableImports[fileIndex];
+      const fileProgressStart = 10 + progressPerFile * fileIndex;
+      const parsedProgress = fileProgressStart + progressPerFile * 0.25;
+      const visualProgress = fileProgressStart + progressPerFile * 0.55;
+      const embeddedProgress = fileProgressStart + progressPerFile;
       try {
         /**
          * 解析并保存 Chunk
          * importId -> 查询 imports + file_versions -> 拿到 storageKey、mediaType、snapshotId ->> 从本地磁盘或 Blob 读取文件 bytes ->> 按 MIME 分派对应解析器
          */
-        
-        await parseAndStoreChunks(indexableImport.id);
+        await parseAndStoreChunks(indexableImport.id, {
+          batchId,
+          endPercent: parsedProgress,
+        });
         /** PDF 无文本页与 DOCX 内嵌图片各自挑选候选，复用同一视觉资产持久化入口。 */
         await analyzeIndexableImportVisualAssets(
           indexableImport.id,
           indexableImport.mediaType,
+          { batchId, endPercent: visualProgress },
         );
         /**
          * Embedding  查询当前文件版本下所有embedding IS NULL
          */
-        embeddedChunkCount += await embedStoredChunks(indexableImport.id);
+        embeddedChunkCount += await embedStoredChunks(indexableImport.id, {
+          batchId,
+          startPercent: visualProgress,
+          endPercent: embeddedProgress,
+        });
         //文件就绪 imports.status = running ->> ready
-        await markIndexableImportReady(indexableImport.id);
+        await markIndexableImportReady(indexableImport.id, {
+          batchId,
+          endPercent: embeddedProgress,
+          nextStage:
+            fileIndex + 1 < indexableImports.length ? "parsing" : "visualizing",
+        });
       } catch (error) {
         const message = getErrorMessage(error, "Import file failed.");
         await failIndexableImport(indexableImport.id, message);
@@ -72,8 +97,20 @@ export async function ingestImportBatchWorkflow(batchId: string) {
     /** 图片附件可以独立更新；为继承的 Markdown 补建新图片版本的视觉 Chunk。 */
     const inheritedMarkdownImports =
       await analyzeInheritedMarkdownAssets(batchId);
-    for (const importId of inheritedMarkdownImports)
-      embeddedChunkCount += await embedStoredChunks(importId);
+    for (
+      let importIndex = 0;
+      importIndex < inheritedMarkdownImports.length;
+      importIndex += 1
+    ) {
+      const startPercent =
+        95 + (3 * importIndex) / inheritedMarkdownImports.length;
+      const endPercent =
+        95 + (3 * (importIndex + 1)) / inheritedMarkdownImports.length;
+      embeddedChunkCount += await embedStoredChunks(
+        inheritedMarkdownImports[importIndex],
+        { batchId, startPercent, endPercent },
+      );
+    }
     // 所有可索引文件都 ready后发布整个批次
     await publishImportBatch(batchId);
   } catch (error) {

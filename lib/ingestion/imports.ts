@@ -35,6 +35,16 @@ export const LOCAL_WORKSPACE_ID = "local-default-workspace";
 /** 本地开发模式下唯一的所有者标识。 */
 export const LOCAL_OWNER_ID = "local-owner";
 
+/** 导入批次对外公开的稳定处理阶段。 */
+export type ImportProgressStage =
+  | "queued"
+  | "parsing"
+  | "visualizing"
+  | "embedding"
+  | "finalizing"
+  | "completed"
+  | "failed";
+
 export type VaultUploadFile = {
   relativePath: string;
   bytes: Uint8Array;
@@ -89,6 +99,8 @@ export async function createLocalImportBatch(files: VaultUploadFile[]) {
       workspaceId: LOCAL_WORKSPACE_ID,
       snapshotId,
       status: "queued",
+      progressPercent: 10,
+      progressStage: "queued",
     });
 
     for (const file of files) {
@@ -177,6 +189,8 @@ export async function getLocalImportBatchStatus(batchId: string) {
     .select({
       id: importBatches.id,
       status: importBatches.status,
+      progressPercent: importBatches.progressPercent,
+      progressStage: importBatches.progressStage,
       errorMessage: importBatches.errorMessage,
     })
     .from(importBatches)
@@ -322,6 +336,27 @@ export async function setImportBatchWorkflowRun(
   await getDatabase()
     .update(importBatches)
     .set({ workflowRunId })
+    .where(eq(importBatches.id, batchId));
+}
+
+/**
+ * 持久化整批导入的真实阶段进度，Workflow 重放时重复写入同一值是安全的。
+ *
+ * @param batchId 导入批次标识。
+ * @param progressPercent 0 到 100 的整体完成百分比。
+ * @param progressStage 当前处理阶段。
+ */
+export async function updateImportBatchProgress(
+  batchId: string,
+  progressPercent: number,
+  progressStage: ImportProgressStage,
+) {
+  await getDatabase()
+    .update(importBatches)
+    .set({
+      progressPercent: Math.max(0, Math.min(100, Math.round(progressPercent))),
+      progressStage,
+    })
     .where(eq(importBatches.id, batchId));
 }
 
@@ -523,7 +558,13 @@ export async function publishImportBatch(batchId: string) {
       .where(eq(indexSnapshots.id, batch.snapshotId));
     await transaction
       .update(importBatches)
-      .set({ status: "completed", completedAt: new Date(), errorMessage: null })
+      .set({
+        status: "completed",
+        progressPercent: 100,
+        progressStage: "completed",
+        completedAt: new Date(),
+        errorMessage: null,
+      })
       .where(eq(importBatches.id, batchId));
   });
 }
@@ -556,7 +597,12 @@ export async function markImportBatchRunning(batchId: string) {
   await db.transaction(async (transaction) => {
     await transaction
       .update(importBatches)
-      .set({ status: "running", errorMessage: null })
+      .set({
+        status: "running",
+        progressPercent: 10,
+        progressStage: "parsing",
+        errorMessage: null,
+      })
       .where(eq(importBatches.id, batchId));
     await transaction
       .update(imports)
@@ -573,6 +619,7 @@ export async function markBatchFailed(batchId: string, message: string) {
       .update(importBatches)
       .set({
         status: "failed",
+        progressStage: "failed",
         errorMessage: message.slice(0, 1_000),
         completedAt: new Date(),
       })
