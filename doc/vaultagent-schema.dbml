@@ -1,0 +1,215 @@
+// 修改时间：2026-09-08 | 文件说明：VaultAgent 当前 PostgreSQL 表模型，可直接粘贴到 dbdiagram.io | edit by：Sliye
+
+Project VaultAgent {
+  database_type: 'PostgreSQL'
+  Note: 'VaultAgent 当前数据库模型。字段名保留真实数据库命名，中文说明用于阅读。'
+}
+
+// 工作空间与身份
+TableGroup workspace_identity {
+  workspaces
+  principals
+}
+
+Table workspaces {
+  id varchar(64) [pk, not null, note: '工作空间唯一标识']
+  mode varchar(16) [not null, note: '运行模式，例如 local / public-demo']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+
+  Note: '工作空间。当前底层为单个“我的知识库”，保留 workspace_id 便于未来扩展多知识库。'
+}
+
+Table principals {
+  id varchar(64) [pk, not null, note: '主体唯一标识']
+  workspace_id varchar(64) [not null, note: '所属工作空间']
+  kind varchar(16) [not null, note: '主体类型，例如 owner / visitor']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+
+  Indexes {
+    workspace_id [name: 'principals_workspace_id_idx']
+  }
+
+  Note: '工作空间中的访问主体。当前数据库未额外声明 kind 的枚举或 CHECK 约束。'
+}
+
+// 知识库导入与索引
+TableGroup knowledge_ingestion {
+  logical_files
+  file_versions
+  imports
+  index_snapshots
+  chunks
+}
+
+Table logical_files {
+  id varchar(64) [pk, not null, note: '逻辑文件唯一标识']
+  workspace_id varchar(64) [not null, note: '所属工作空间']
+  display_name varchar(255) [not null, note: '文件展示名称']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+  deleted_at "timestamp with time zone" [note: '软删除时间；为空表示未删除']
+
+  Indexes {
+    workspace_id [name: 'logical_files_workspace_id_idx']
+  }
+
+  Note: '逻辑文件。一个逻辑文件可以拥有多个不可变文件版本。'
+}
+
+Table file_versions {
+  id varchar(64) [pk, not null, note: '文件版本唯一标识']
+  logical_file_id varchar(64) [not null, note: '所属逻辑文件']
+  version_number integer [not null, note: '同一逻辑文件内的版本号']
+  content_hash varchar(64) [not null, note: '文件内容哈希']
+  media_type varchar(127) [not null, note: '媒体类型，例如 text/markdown']
+  byte_size bigint [not null, note: '文件大小，单位：字节']
+  storage_key text [not null, note: '原始文件存储键']
+  status varchar(16) [not null, note: '文件版本状态']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+
+  Indexes {
+    (logical_file_id, version_number) [unique, name: 'file_versions_logical_file_version_uq']
+    content_hash [name: 'file_versions_content_hash_idx']
+  }
+
+  Note: '文件版本。logical_file_id + version_number 保证同一逻辑文件的版本号不重复。'
+}
+
+Table index_snapshots {
+  id varchar(64) [pk, not null, note: '索引快照唯一标识']
+  workspace_id varchar(64) [not null, note: '所属工作空间']
+  status varchar(16) [not null, note: '快照状态，例如 building / published']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+  published_at "timestamp with time zone" [note: '发布时间']
+
+  Indexes {
+    workspace_id [name: 'index_snapshots_workspace_id_idx']
+  }
+
+  Note: '索引快照。一次 Run 固定使用一个快照，保证回答引用的资料范围稳定。'
+}
+
+Table imports {
+  id varchar(64) [pk, not null, note: '导入任务唯一标识']
+  workspace_id varchar(64) [not null, note: '所属工作空间']
+  file_version_id varchar(64) [not null, note: '待导入的文件版本']
+  snapshot_id varchar(64) [not null, note: '导入写入的索引快照']
+  workflow_run_id varchar(255) [note: 'Workflow 外部运行标识；当前未建立数据库外键']
+  status varchar(16) [not null, note: '导入状态，例如 queued / running / completed / failed']
+  error_message text [note: '失败原因']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+  completed_at "timestamp with time zone" [note: '完成时间']
+
+  Indexes {
+    (workspace_id, status) [name: 'imports_workspace_status_idx']
+  }
+
+  Note: '文件导入任务。workflow_run_id 指向 Workflow 系统中的外部运行记录。'
+}
+
+Table chunks {
+  id varchar(64) [pk, not null, note: '文本块唯一标识']
+  file_version_id varchar(64) [not null, note: '来源文件版本']
+  snapshot_id varchar(64) [not null, note: '所属索引快照']
+  ordinal integer [not null, note: '文本块在文件版本中的顺序号']
+  content text [not null, note: '文本块正文']
+  content_hash varchar(64) [not null, note: '文本块内容哈希']
+  start_line integer [not null, note: '原文件起始行号']
+  end_line integer [not null, note: '原文件结束行号']
+  embedding vector(1024) [note: 'pgvector 向量，固定 1024 维；可为空']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+
+  Indexes {
+    (file_version_id, ordinal) [unique, name: 'chunks_file_version_ordinal_uq']
+    snapshot_id [name: 'chunks_snapshot_id_idx']
+  }
+
+  Note: '检索文本块。embedding 使用 PostgreSQL pgvector 存储，用于余弦相似度检索。'
+}
+
+// 会话与执行记录
+TableGroup conversation_execution {
+  conversations
+  messages
+  runs
+  run_events
+}
+
+Table conversations {
+  id varchar(64) [pk, not null, note: '会话唯一标识']
+  workspace_id varchar(64) [not null, note: '所属工作空间']
+  title varchar(255) [not null, note: '会话标题']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+  deleted_at "timestamp with time zone" [note: '软删除时间；为空表示未删除']
+
+  Indexes {
+    workspace_id [name: 'conversations_workspace_id_idx']
+  }
+
+  Note: '聊天会话。一个会话可以产生多次 Run。'
+}
+
+Table messages {
+  id varchar(64) [pk, not null, note: '消息唯一标识']
+  conversation_id varchar(64) [not null, note: '所属会话']
+  run_id varchar(64) [note: '所属 Run；当前未建立数据库外键']
+  role varchar(16) [not null, note: '消息角色，例如 user / assistant']
+  content text [not null, note: '消息正文']
+  status varchar(16) [not null, note: '消息状态']
+  citations jsonb [not null, default: `[]`, note: '引用信息 JSON 数组']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+
+  Indexes {
+    conversation_id [name: 'messages_conversation_id_idx']
+    run_id [name: 'messages_run_id_idx']
+  }
+
+  Note: '会话消息。助手消息的 citations 保存真实文本块定位信息。run_id 只做业务层关联。'
+}
+
+Table runs {
+  id varchar(64) [pk, not null, note: 'Run 唯一标识']
+  conversation_id varchar(64) [not null, note: '所属会话']
+  snapshot_id varchar(64) [not null, note: '本次 Run 固定使用的索引快照']
+  status varchar(16) [not null, note: '执行状态，例如 queued / running / completed / failed / cancelled']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+  completed_at "timestamp with time zone" [note: '完成时间']
+
+  Indexes {
+    conversation_id [name: 'runs_conversation_id_idx']
+  }
+
+  Note: '一次知识问答执行。会话、消息和 Run 分离保存。'
+}
+
+Table run_events {
+  id varchar(64) [pk, not null, note: '事件唯一标识']
+  run_id varchar(64) [not null, note: '所属 Run']
+  sequence integer [not null, note: 'Run 内单调递增的事件序号']
+  event_type varchar(32) [not null, note: '事件类型，例如 run_started / final_delta / run_completed']
+  step_id varchar(128) [note: 'Workflow 或 Agent 步骤标识']
+  payload jsonb [not null, note: '事件载荷 JSON']
+  created_at "timestamp with time zone" [not null, default: `now()`, note: '创建时间']
+
+  Indexes {
+    (run_id, sequence) [unique, name: 'run_events_run_sequence_uq']
+    run_id [name: 'run_events_run_id_idx']
+  }
+
+  Note: 'Run 事件流。run_id + sequence 保证同一 Run 内事件顺序唯一。'
+}
+
+// 数据库中真实存在的外键关系
+Ref: principals.workspace_id > workspaces.id [delete: cascade]
+Ref: logical_files.workspace_id > workspaces.id [delete: cascade]
+Ref: file_versions.logical_file_id > logical_files.id [delete: cascade]
+Ref: index_snapshots.workspace_id > workspaces.id [delete: cascade]
+Ref: imports.workspace_id > workspaces.id [delete: cascade]
+Ref: imports.file_version_id > file_versions.id [delete: cascade]
+Ref: imports.snapshot_id > index_snapshots.id [delete: cascade]
+Ref: chunks.file_version_id > file_versions.id [delete: cascade]
+Ref: chunks.snapshot_id > index_snapshots.id [delete: cascade]
+Ref: conversations.workspace_id > workspaces.id [delete: cascade]
+Ref: messages.conversation_id > conversations.id [delete: cascade]
+Ref: runs.conversation_id > conversations.id [delete: cascade]
+Ref: runs.snapshot_id > index_snapshots.id [delete: no action]
+Ref: run_events.run_id > runs.id [delete: cascade]

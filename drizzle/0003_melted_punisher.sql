@@ -1,0 +1,1 @@
+ALTER TABLE "chunks" ADD COLUMN "source_locator" jsonb DEFAULT '{}'::jsonb NOT NULL;

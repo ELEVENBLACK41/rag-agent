@@ -1,16 +1,17 @@
-<!-- 修改时间：2026-09-04 | 文件说明：VaultAgent 项目协作与开发规范 | edit by：Codex -->
-
 # VaultAgent 开发规范
 
 # 
 
 ## 协作与决策
-- 称呼用户为“老大”，使用中文，沟通直接、简洁，先讲结论。
+- 称呼用户为“老大”，使用中文，沟通直接、简洁，先讲结论
 - 保持批判性思维；发现需求、判断或方案有问题时，说明依据、影响和可行替代，不一味附和。
-- 项目范围与技术方案参考 `VAULTAGENT_PLAN.md`；最新用户决定优先，发现冲突先说明。
+- 项目范围与技术方案参考 `项目整体计划.md`；最新用户决定优先，发现冲突先说明。
+- 生产代码按长期稳定的领域能力与职责命名、组织，例如 ImportBatch、IngestionPipeline、DocumentParser、SourceLocator；DAY/D1-D20 只用于计划文档、验收记录和阶段说明，禁止让排期编号进入业务模块、函数、变量或类型命名。
+- 新增格式或能力优先接入已有稳定接口（例如 ZIP 作为容器、MD/PDF/DOCX/XLSX 作为独立解析器），避免为了当前阶段重命名既有领域概念或改动主链路。抽象必须由当前与至少一个明确的后续实现共同验证，禁止为未来假设预建通用框架。
 - 只完成当前授权范围，不擅自增加功能、重构、安装新技术栈或部署。
 - 新技术能明显降低复杂度时，先说明收益、依赖成本及替代方案，征得同意后引入，例如 Zustand。
 - 已确认的决定不反复询问；遇到真实阻塞说明原因，不虚构完成、验证结果或性能指标。
+- 完成的阶段和目标要在doc的对应天数文档中写下md文档进行迭代
 
 ## 最小化实现
 - 优先最小必要改动；能用少量清晰代码完成，就不增加更多代码，不顺手改无关文件。
@@ -29,12 +30,16 @@
 - 禁止在组件中写死颜色值；使用主题变量和语义 token。主题定义集中管理，避免各处重复色值。
 - 如发现使用状态管理 如 zustend能够更好的 方便的 少代码的去完成功能 ，可以询问我安装使用，包括其他的技术栈等等。
 - 保持加载、空状态、失败、取消与键盘交互可用；不展示模型完整私密思维链。
+- Next.js 的 `app/**/page.tsx` 只负责路由入口、数据获取和页面组合，必须保持轻量；不要因目录形式重复创建等价页面或路由。
+- 当聊天、导入等客户端业务组件同时承担独立的展示区与异步状态时，按职责拆分为必要的展示组件和 Hook；页面组合、上传/导入、消息列表、输入框、SSE/任务状态不要长期堆在同一个大组件中。禁止为了目录好看而拆出没有独立职责的文件。
+- 校验集中在正确边界：不可信请求、文件/ZIP 解压、鉴权、数据库状态转换和外部服务调用必须校验；已通过类型、入口校验或 UI 状态保证的条件，不在后续每一层重复防御性判断。优先在 API 入口用 Schema 一次解析，再向业务层传递准确类型；禁止用无依据默认值掩盖失败或伪造成功。
 
 ## 文件结构与注释
+- 注释写中文吗，在文件中定义的变量 也要写注释说明他是干什么的例如 ：const EMBEDDING_BATCH_SIZE = 50;
 - 遵循 Next.js App Router 和现有项目约定，按职责组织，避免用“大厂规范”名义制造空目录或迁移工程。
 - `app/` 放路由与页面组合，`components/` 放界面组件，`lib/` 按 agent、retrieval、ingestion 等业务领域划分。
 - `workflows/` 放持久任务；领域逻辑复用，避免页面/API 文件承担所有职责或出现万能 utils 文件。
-- 每个新增或实质修改的自维护文件顶部标注：修改时间（YYYY-MM-DD）、文件说明、`edit by` 与实际修改者。
+- 每个新增或实质修改的自维护文件顶部标注：修改时间（YYYY-MM-DD）、文件说明、`edit by 要写Sliye`。
 - 使用文件格式支持的注释；严格 JSON、二进制、锁文件和生成文件不强行插入头注释，不批量改第三方源码。
 - 函数前写简明说明，参数写注释，优先使用 JSDoc/TSDoc 的 `@param`；说明语义、单位与约束。
 - 复杂函数、关键算法、状态转换及副作用写清设计原因和边界；避免逐行翻译代码的冗余注释。
@@ -42,6 +47,7 @@
 - API 用法以已安装版本和官方文档为准，不凭旧记忆编造；不使用 `@ts-ignore` 等手段掩盖版本错误。
 - 命名明确、类型准确，避免无必要的 `any`、复制粘贴和失效注释。
 - 尤其注意文件结构 保持规范 清晰 让人能够一眼看出分层管理，便于迭代，解耦等等
+- 尽量不要删除我写的对的代码注释
 
 ## 数据与验证
 - 业务路径中不保留测试数据、假回复、Mock 接口或硬编码演示结果。
@@ -53,13 +59,3 @@
 - 使用项目现有包管理器与锁文件；不混用安装工具，不无故升级依赖。
 - 密钥仅存服务端，日志脱敏；不提交私人知识库、凭据或模型私密推理。
 - 完成后简述改动、实际验证及仍存在的限制，不运行与本次改动无关的检查。
-
-<!-- BEGIN:nextjs-agent-rules -->
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
