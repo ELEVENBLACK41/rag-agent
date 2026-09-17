@@ -17,7 +17,8 @@ export function isDisplayableImageCitation(source: SourceCitation) {
 
 /**
  * 校验独立来源字段，只发布模型声明使用且属于本轮已读取证据的来源；
- * 图片选择自动并入回答来源，避免展示没有来源卡片的孤立图片。
+ * 图片选择自动并入回答来源，避免展示没有来源卡片的孤立图片。模型偶发
+ * 误选普通文本来源时，降级为普通来源并返回提示信息，不能让整轮回答失败。
  *
  * @param citationIds 已通过输出 Schema 校验的来源编号列表，不从正文提取。
  * @param imageCitationIds 模型要求内联展示的视觉来源编号。
@@ -33,11 +34,18 @@ export function selectAnswerCitations(
   const imageIds = new Set(imageCitationIds);
   /** 来源编号只能由本轮读取过程分配。 */
   const byId = new Map(sources.map((source) => [source.id, source]));
-  return [...ids].map<AnswerCitation>((id) => {
+  const unavailableImageNames = new Set<string>();
+  const citations: AnswerCitation[] = [];
+  for (const id of ids) {
     const source = byId.get(id);
     if (!source) throw new Error("回答包含无效来源编号，请重新提问。");
-    if (imageIds.has(id) && !isDisplayableImageCitation(source))
-      throw new Error("回答包含不可展示的图片来源，请重新提问。");
-    return imageIds.has(id) ? { ...source, displayImage: true } : source;
-  });
+    if (imageIds.has(id) && !isDisplayableImageCitation(source)) {
+      unavailableImageNames.add(source.displayName);
+      // 同一条证据仍可作为普通来源展示，只是不渲染为图片。
+      citations.push(source);
+      continue;
+    }
+    citations.push(imageIds.has(id) ? { ...source, displayImage: true } : source);
+  }
+  return { citations, unavailableImageNames: [...unavailableImageNames] };
 }

@@ -314,11 +314,20 @@ export async function* executeChatRun(
       throw new ChatExecutionError("回答期间知识库文件清单已变化，请重新提问。");
     }
   }
-  const answerCitations = selectAnswerCitations(
+  const citationSelection = selectAnswerCitations(
     output.citationIds,
     output.imageCitationIds,
     citations,
   );
+  const answerCitations = citationSelection.citations;
+  if (citationSelection.unavailableImageNames.length) {
+    const unavailableImages = citationSelection.unavailableImageNames
+      .map((name) => `\`${name}\``)
+      .join("、");
+    const notice = `\n\n提示：${unavailableImages} 检测到相关图片引用，但当前没有可展示的图片资源，因此未在下方展示。`;
+    answer += notice;
+    yield { type: "delta", data: { text: notice } };
+  }
   // 输出期间资料也可能被删除，发布前再次校验实际引用的来源。
   if (answerCitations.length && chatRun.snapshotId) {
     const available = await readSnapshotSources(

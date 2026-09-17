@@ -54,7 +54,7 @@ export function buildFinalInstruction(context: FinalAnswerContext) {
   const citationIds = new Map(citations.map((citation) => [citation.chunkId, citation.id]));
   /** 来源以独立字段返回；没有正文来源时不能为元数据或草稿编造来源。 */
   const citationInstructions = sources.length
-    ? "citationIds 只填写 answer 实际使用的正文来源的数字 citationId，不要把所有读取过的来源都列入。文件名、字段名、publicDraft 和 fileInventory 不能作为来源编号。用户明确要求查找、给出或展示知识库图片时，从实际匹配且 canDisplayImage=true 的来源中选择最多 4 个 imageCitationIds，并在 answer 中说明图片展示在下方；这些编号也应作为回答来源。存在可展示图片时不得声称受工具限制无法展示，即使 publicDraft 曾这样声称也必须纠正。用户没有要求展示图片时 imageCitationIds 必须为空。来源卡片和图片由界面单独展示，answer 严禁写 Markdown 图片、HTML img、图片 URL、引用编号、引用标记或来源列表，也不得编造 CDN 地址。"
+    ? "citationIds 只填写 answer 实际使用的正文来源的数字 citationId，不要把所有读取过的来源都列入。文件名、字段名、publicDraft 和 fileInventory 不能作为来源编号。用户明确要求查找、给出或展示知识库图片时，从实际匹配且 canDisplayImage=true 的来源中选择最多 4 个 imageCitationIds，并在 answer 中说明图片展示在下方；这些编号也应作为回答来源。sourceKind=text 即使正文含图片文件名或附件引用，也不是可展示图片：可以说明检测到图片引用，但不得说图片会在下方展示，也不得填入 imageCitationIds。存在可展示图片时不得声称受工具限制无法展示，即使 publicDraft 曾这样声称也必须纠正。用户没有要求展示图片时 imageCitationIds 必须为空。来源卡片和图片由界面单独展示，answer 严禁写 Markdown 图片、HTML img、图片 URL、引用编号、引用标记或来源列表，也不得编造 CDN 地址。"
     : "本轮没有可引用的正文来源，citationIds 和 imageCitationIds 必须为空数组。文件清单中的名称、格式、数量和空清单结论可直接回答；缺少正文证据时如实说明，不编造文件内容。answer 内不写引用编号、图片 URL、引用标记或来源列表。";
   return [
     "你是 VaultAgent，按输出 Schema 返回 answer、citationIds、webSourceIds 和 imageCitationIds。先生成 answer 正文，再给出独立来源与图片选择；answer 是面向用户的最终回答。",
