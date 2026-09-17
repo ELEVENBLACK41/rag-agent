@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ImportBatchState, ImportFileState } from "@/components/chat/use-import-batch";
 
 type ImportPanelProps = {
@@ -98,37 +99,41 @@ export function ImportPanel({ batch, error, files, importProgress, isLoading, is
         <CardContent>
           {isLoading && <p role="status" className="rounded-xl bg-muted/40 p-5 text-sm text-muted-foreground">正在读取知识库文件…</p>}
           {!isLoading && files.length === 0 && <div className="rounded-xl bg-muted/30 px-5 py-12 text-center"><FileTextIcon className="mx-auto mb-4 size-7 text-muted-foreground" /><p className="font-medium">还没有可查询文档</p><p className="mt-2 text-sm leading-relaxed text-muted-foreground">上传文档并完成索引后会出现在这里；已保存的图片请前往「图片附件」。</p></div>}
-          {files.length > 0 && <ul className="divide-y divide-border" aria-label="知识库文件列表">
-            {files.map((file) => (
-              <li className="space-y-2 py-4 first:pt-0 last:pb-0" key={file.id}>
-                <div className="flex items-start gap-3">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                    {file.mediaType.startsWith("image/") ? <ImageIcon className="size-4" /> : <FileTextIcon className="size-4" />}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="break-all text-sm font-medium leading-relaxed">{file.sourcePath ?? file.displayName}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{formatFileSize(file.byteSize)}{file.updatedAt ? ` · ${formatDate(file.updatedAt)}` : ""}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      {file.versionNumber && <Badge variant="outline">v{file.versionNumber}</Badge>}
-                      {file.isActiveVersion && <Badge variant="secondary">AI 当前使用</Badge>}
-                      <Badge variant={file.status === "failed" ? "destructive" : "secondary"}>{getFileStatusLabel(file.status, file.mediaType)}</Badge>
+          {files.length > 0 && (
+            <ScrollArea className="h-[60dvh] min-h-72 max-h-[42rem] pr-3">
+              <ul className="divide-y divide-border" aria-label="知识库文件列表">
+                {files.map((file) => (
+                  <li className="space-y-2 py-4 first:pt-0 last:pb-0" key={file.id}>
+                    <div className="flex items-start gap-3">
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                        {file.mediaType.startsWith("image/") ? <ImageIcon className="size-4" /> : <FileTextIcon className="size-4" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="break-all text-sm font-medium leading-relaxed">{file.sourcePath ?? file.displayName}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{formatFileSize(file.byteSize)}{file.updatedAt ? ` · ${formatDate(file.updatedAt)}` : ""}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          {file.versionNumber && <Badge variant="outline">v{file.versionNumber}</Badge>}
+                          {file.isActiveVersion && <Badge variant="secondary">AI 当前使用</Badge>}
+                          <Badge variant={file.status === "failed" ? "destructive" : "secondary"}>{getFileStatusLabel(file.status, file.mediaType)}</Badge>
+                        </div>
+                      </div>
+                      {file.status !== "deleted" && <Button className="shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`删除 ${file.displayName}`} onClick={() => onRemoveFile(file.id)} size="icon-sm" type="button" variant="ghost"><Trash2Icon className="size-4" /></Button>}
                     </div>
-                  </div>
-                  {file.status !== "deleted" && <Button className="shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`删除 ${file.displayName}`} onClick={() => onRemoveFile(file.id)} size="icon-sm" type="button" variant="ghost"><Trash2Icon className="size-4" /></Button>}
-                </div>
-                {file.diagnostics.map((diagnostic) => (
-                  <p className="break-words pl-12 text-xs leading-relaxed text-muted-foreground" key={`${diagnostic.stage}-${diagnostic.pageNumber ?? 0}-${diagnostic.message}`}>
-                    {diagnostic.pageNumber ? `第 ${diagnostic.pageNumber} 页：` : ""}{diagnostic.message}
-                  </p>
+                    {file.diagnostics.map((diagnostic) => (
+                      <p className="break-words pl-12 text-xs leading-relaxed text-muted-foreground" key={`${diagnostic.stage}-${diagnostic.pageNumber ?? 0}-${diagnostic.message}`}>
+                        {diagnostic.pageNumber ? `第 ${diagnostic.pageNumber} 页：` : ""}{diagnostic.message}
+                      </p>
+                    ))}
+                    {file.visualAssets.map((asset) => (
+                      <p className="break-words pl-12 text-xs leading-relaxed text-muted-foreground" key={`visual-${asset.sourceKey}`}>
+                        {getVisualAssetLocation(asset.sourceKey, asset.pageNumber)}视觉分析：{getVisualAssetLabel(asset.status, asset.errorMessage)}
+                      </p>
+                    ))}
+                  </li>
                 ))}
-                {file.visualAssets.map((asset) => (
-                  <p className="break-words pl-12 text-xs leading-relaxed text-muted-foreground" key={`visual-${asset.sourceKey}`}>
-                    {getVisualAssetLocation(asset.sourceKey, asset.pageNumber)}视觉分析：{getVisualAssetLabel(asset.status, asset.errorMessage)}
-                  </p>
-                ))}
-              </li>
-            ))}
-          </ul>}
+              </ul>
+            </ScrollArea>
+          )}
         </CardContent>
       </Card>
     </div>
