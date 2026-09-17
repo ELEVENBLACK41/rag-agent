@@ -1,7 +1,8 @@
-/** 修改时间：2026-09-16 | 文件说明：实时聊天与历史回放共用的纯消息状态转换 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：实时聊天与历史回放共用的纯消息状态转换 | edit by：Sliye */
 import type {
   ChatMessage,
   AnswerCitation,
+  WebSource,
   ChatStageUpdate,
   ChatStreamEvent,
   ChatToolActivity,
@@ -112,6 +113,7 @@ export function applyChatEvent(
       return {
         ...message,
         citations: event.data.citations,
+        webSources: event.data.webSources ?? [],
         process: {
           ...process,
           status: "completed",
@@ -186,7 +188,7 @@ export function replayMessageEvent(
     case "run_completed":
       event = {
         type: "complete",
-        data: { citations: payload.citations as AnswerCitation[] },
+        data: { citations: payload.citations as AnswerCitation[], webSources: payload.webSources as WebSource[] | undefined },
       };
       break;
     case "run_failed":

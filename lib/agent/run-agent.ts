@@ -1,10 +1,10 @@
 /**
- * 修改时间：2026-09-16
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent D9 受限多步问答 Agent 装配。
  * 为一次问答创建Agent 规定用什么模型，遵守什么规则，什么时候调用什么工具，何时停止
  *
  * 每个 Run 临时创建一个 Agent，避免把快照、候选来源或引用状态放在模块级单例。
- * 模型只能调用本地只读工具；知识库事实必须基于已读取证据，普通交流可直接回答。
+ * 模型按本轮授权调用本地只读与联网搜索工具；知识库事实必须基于已读取证据。
  *
  * AI SDK Agent 文档：https://ai-sdk.dev/docs/ai-sdk-core/agents
  *
@@ -13,7 +13,8 @@
 
 import { gateway, hasToolCall, stepCountIs, ToolLoopAgent } from "ai";
 import { createVaultTools } from "@/lib/agent/tools";
-import type { VaultRunState } from "@/lib/agent/run-state";
+import { MAX_AGENT_TOOL_CALLS, type VaultRunState } from "@/lib/agent/run-state";
+import { MAX_WEB_SEARCH_CALLS } from "@/lib/agent/web-search";
 import { describeConversationContext } from "@/lib/chat/conversation-context";
 
 /** D9 最多执行六个模型步骤，避免工具循环无限延长
@@ -25,11 +26,12 @@ export const MAX_AGENT_OUTPUT_TOKENS = 1_200;
 /** D1 已真实验证的主问答模型。 */
 const CHAT_MODEL = "alibaba/qwen3.7-flash";
 
-/** @param state 本轮快照与工具预算。 @param historyTruncated 较早对话是否因预算省略。 @param assertActive 工具入口的持久执行门禁。 */
+/** @param state 本轮快照与工具预算。 @param historyTruncated 较早对话是否因预算省略。 @param assertActive 本地工具和模型步骤入口的持久执行门禁。 @param webSearchEnabled 本轮联网授权。 */
 export function createVaultRunAgent(
   state: VaultRunState,
   historyTruncated: boolean,
   assertActive: () => Promise<void>,
+  webSearchEnabled = false,
 ) {
   /** 两个阶段共用的行为与证据边界，切换职责时始终保留
    * 始终生效得基础规则
@@ -39,6 +41,10 @@ export function createVaultRunAgent(
     // 告诉模型怎样试用历史对话
     describeConversationContext(historyTruncated),
     "依据当前问题和实际提供的会话上下文，按需使用可用工具；工具的用途和参数以各自定义为准。",
+    webSearchEnabled
+      ? "本轮用户已开启联网。需要时效信息、公开外部资料或用户要求联网时，调用 search_web；空知识库不妨碍联网。只查询最小公开关键词，禁止外发私人笔记、内部项目、个人信息或完整会话。结合真实搜索摘要解释与延伸，区分事实和推断，不宣称已抓取全文。"
+      : "本轮未授权联网，不声称已搜索网页或核实最新信息。",
+    "search_web 使用原生搜索参数，不传 briefing。一次只发一个精简查询，不重复搜索；用户指定官方资料或网站时使用 site: 限定对应公开域名。保持最多 5 条结果、总摘要 3000 tokens、单页 600 tokens，不提高工具默认上限。",
     "普通交流、一般知识及无需补充资料的任务可以直接回答；涉及用户知识库的事实必须有本轮工具实际返回的证据支持，不超出证据范围，不将一般知识称为用户资料中的结论。",
     "用户要求介绍、概括或解释某份资料时，需要获取其正文；要求简短只改变回答长度，不免除读取证据。历史中的文件名可以用于理解指代，但历史回答中的‘没有获取到’不是本轮无法读取的依据。尚未尝试获取证据时应使用可用工具，不直接回答无法获取。",
     state.snapshotId //根据有没有已发布快照，给模型提供不同的事实背景
@@ -68,11 +74,13 @@ export function createVaultRunAgent(
   return new ToolLoopAgent({
     model: gateway(CHAT_MODEL),
     instructions: initialInstructions,
-    tools: createVaultTools(state, assertActive), //完成得工具集合,这个函数主要是为了在手动终止任务的时候不要调用工具了,查询一下任务是否还在允许运行
+    tools: createVaultTools(state, assertActive, webSearchEnabled),
     stopWhen: [
       hasToolCall("finish_research"),
       stepCountIs(MAX_AGENT_STEPS),
       () => state.isToolBudgetExhausted(),
+      // 原生搜索没有本地 execute；按 SDK 返回的真实调用在步骤边界计入总预算。
+      ({ steps }) => steps.reduce((count, step) => count + step.toolCalls.length, 0) >= MAX_AGENT_TOOL_CALLS,
     ], //什么时候停止 就是调用了finish_research，达到了最大步骤数，或者是工具预算耗尽
     maxRetries: 0,
     maxOutputTokens: MAX_AGENT_OUTPUT_TOKENS,
@@ -80,8 +88,10 @@ export function createVaultRunAgent(
     // 官方：https://ai-sdk.dev/docs/agents/loop-control；初始步骤按需调用，收集阶段通过工具交接结束。
     // 每一步开始钱重新配置，steps是当前这一次 Agent 执行中已经完成的步骤
     //instructions 可以覆盖当前步骤发送给模型的指令，而且覆盖结果会延续到后续步骤
-    prepareStep: ({ steps, initialMessages, responseMessages }) => {
-      if (!state.snapshotId) return { activeTools: [], toolChoice: "none" }; //空库不调用工具
+    prepareStep: async ({ steps, initialMessages, responseMessages }) => {
+      await assertActive();
+      if (!state.snapshotId && !webSearchEnabled) return { activeTools: [], toolChoice: "none" }; //空库且未授权联网时直接回答
+      const webSearchCalls = steps.flatMap((step) => step.toolCalls).filter((call) => call?.toolName === "search_web").length;
       /** 调用过工具后要求继续收集或显式交接，避免直接生成另一份最终回答结束。 */
       const hasUsedTools = steps.some((step) => step.toolCalls.length > 0);
       return {
@@ -103,8 +113,9 @@ export function createVaultRunAgent(
         toolChoice: hasUsedTools ? "required" : "auto",
         activeTools: [
           //动态开放工具
-          "list_files" as const, //固定快照的文件清单，不依赖搜索候选
-          ...(state.canSearch() ? ["search_notes" as const] : []), //开放条件 搜索预算尚未耗尽
+          ...(state.snapshotId ? ["list_files" as const] : []), //固定快照的文件清单，不依赖搜索候选
+          ...(state.snapshotId && state.canSearch() ? ["search_notes" as const] : []), //开放条件 搜索预算尚未耗尽
+          ...(webSearchEnabled && webSearchCalls < MAX_WEB_SEARCH_CALLS ? ["search_web" as const] : []),
           ...(state.getPermittedChunkCount() ? ["read_sources" as const] : []), //开放条件 已经有搜索候选
           ...(state.getPermittedChunkCount() && state.canSearch()
             ? ["find_related" as const]

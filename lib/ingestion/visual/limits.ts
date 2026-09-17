@@ -9,9 +9,9 @@
  */
 
 /** 同一导入批次可创建的视觉资产总数，跨 PDF 页和 Office 内嵌图片累计。 */
-export const MAX_VISUAL_ASSETS_PER_IMPORT_BATCH = 5;
+export const MAX_VISUAL_ASSETS_PER_IMPORT_BATCH = 70;
 /** 单份可索引文件自动送入视觉分析的最大候选数量。 */
-export const MAX_VISUAL_CANDIDATES_PER_FILE = 2;
+export const MAX_VISUAL_CANDIDATES_PER_FILE = 20;
 /** 低于该边长的图像不含足够语义，且部分视觉供应商会直接拒绝。 */
 export const MIN_VISUAL_IMAGE_EDGE_PIXELS = 16;
 /** 单张送入视觉模型的图片允许的最大像素数。 */

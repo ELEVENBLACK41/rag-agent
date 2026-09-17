@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：模型流向公开进度事件的转换，不负责数据库或传输 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：模型流向公开进度事件的转换，不负责数据库或传输 | edit by：Sliye */
 import { parsePartialJson } from "ai";
 import type { ChatStageUpdate, ChatStreamEvent, ChatToolActivity } from "@/lib/chat/types";
 
@@ -49,6 +49,7 @@ export function describeToolActivity(
   const labels: Record<string, string> = {
     list_files: "查询文件清单",
     search_notes: "搜索知识库",
+    search_web: "联网搜索",
     read_sources: "读取来源片段",
     find_related: "查找关联资料",
     finish_research: "完成证据收集",

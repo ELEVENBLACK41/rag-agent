@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：持久工作区内的会话加载、路由同步、历史分页与聊天流生命周期 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：会话加载、联网选项、历史分页与聊天流生命周期 | edit by：Sliye */
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
@@ -35,6 +35,8 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
   const selectedConversationRef = useRef<string | null | undefined>(undefined);
   const [session, setSession] = useState<ChatSession>(EMPTY_SESSION);
   const [input, setInput] = useState("");
+  /** 默认关闭；提交时保存到 Run，执行中的选项不随界面状态变化。 */
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<
     "loading" | "older" | "streaming" | "deleting" | null
@@ -74,6 +76,7 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
       setPhase(phaseRef.current);
       setSession({ ...EMPTY_SESSION, id });
       setInput("");
+      setWebSearchEnabled(false);
       setError(null);
       if (writeUrl) updateUrl(id);
       if (!id) return;
@@ -227,6 +230,7 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
             question,
             conversationId: session.id,
             retryRunId,
+            webSearchEnabled,
           }),
           signal: controller.signal,
         }),
@@ -345,6 +349,8 @@ export function useChatSession(refreshDirectory: () => Promise<void>) {
     ...session,
     input,
     setInput,
+    webSearchEnabled,
+    setWebSearchEnabled,
     error,
     phase,
     submitQuestion,

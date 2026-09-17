@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：多步问答执行、证据交接与最终答案流式生成
+/** 修改时间：2026-09-17 | 文件说明：多步问答执行、本地与网页证据交接及最终答案流式生成
  * 
  *  服务端执行编排层，同时也是服务端事件流的生产者
  * 
@@ -7,6 +7,7 @@ import { gateway, Output, streamText } from "ai";
 import { createStageUpdate, completeStage, getPartialBriefing, createToolEvent, getPublicBriefing, describeToolActivity } from "@/lib/chat/run-progress";
 import { createVaultRunAgent } from "@/lib/agent/run-agent";
 import { createVaultRunState } from "@/lib/agent/run-state";
+import { createWebSearchEvidence } from "@/lib/agent/web-search";
 import { selectAnswerCitations } from "@/lib/chat/citations";
 import {
   buildFinalInstruction,
@@ -56,7 +57,8 @@ export async function* executeChatRun(
   });
   /** 两个模型阶段共享相同的最近完整对话，本轮问题只追加一次。 */
   const context = await loadConversationContext(chatRun, question);
-  const agent = createVaultRunAgent(state, context.truncated, control.assertActive);
+  const webSearch = chatRun.webSearchEnabled ? createWebSearchEvidence() : undefined;
+  const agent = createVaultRunAgent(state, context.truncated, control.assertActive, chatRun.webSearchEnabled);
   /** context.messages大概是
    * { role: "user", content: "上一个问题" },
    * { role: "assistant", content: "上一个回答" },
@@ -157,6 +159,9 @@ export async function* executeChatRun(
       });
     }
     if (part.type === "tool-result") {
+      // Gateway 原生工具也可能用正常 tool-result 返回错误，不能一律标记成功。
+      const webStatus = part.toolName === "search_web" ? webSearch?.collect(part.output) ?? "failed" : undefined;
+      if (webStatus === "failed") hasToolError = true;
       if (
         (part.toolName === "search_notes" ||
           part.toolName === "find_related") &&
@@ -170,8 +175,10 @@ export async function* executeChatRun(
       yield createToolEvent({
         toolCallId: part.toolCallId,
         toolName: part.toolName,
-        status: "completed",
-        message: describeToolActivity(part.toolName, "completed"),
+        status: webStatus === "failed" ? "failed" : "completed",
+        message: webStatus === "failed" ? "联网搜索失败，未取得本次结果"
+          : webStatus === "no-results" ? "联网搜索完成，未找到可用结果"
+            : describeToolActivity(part.toolName, "completed"),
       });
     }
     if (part.type === "tool-error") {
@@ -180,7 +187,7 @@ export async function* executeChatRun(
         toolCallId: part.toolCallId,
         toolName: part.toolName,
         status: "failed",
-        message: describeToolActivity(part.toolName, "failed"),
+        message: part.toolName === "search_web" ? "联网搜索失败或超时，未取得本次结果" : describeToolActivity(part.toolName, "failed"),
       });
     }
     if (part.type === "error") throw part.error;
@@ -205,8 +212,9 @@ export async function* executeChatRun(
     chatRun.snapshotId && fileListOffsets.length
       ? await readFileInventory(chatRun.snapshotId, fileListOffsets)
       : null;
-  if (!citations.length && !fileInventory && hasToolError) {
-    throw new ChatExecutionError("知识库工具执行失败，未能取得可用证据，请稍后重试。");
+  const webEvidence = webSearch?.getEvidence() ?? [];
+  if (!citations.length && !fileInventory && !webEvidence.length && hasToolError) {
+    throw new ChatExecutionError("资料查询工具执行失败，未能取得可用证据，请稍后重试。");
   }
   const sources =
     citations.length && chatRun.snapshotId
@@ -230,6 +238,7 @@ export async function* executeChatRun(
     abortSignal: control.signal,
     maxRetries: 0,
     system: buildFinalInstruction({
+      webSources: webEvidence,
       sources,
       citations,
       hasSearched,
@@ -302,6 +311,8 @@ export async function* executeChatRun(
       throw new ChatExecutionError("回答引用的部分来源已不可用，请重新提问。");
   }
   control.signal.throwIfAborted();
-  await completeChatRun(chatRun, answer, answerCitations);
-  yield { type: "complete", data: { citations: answerCitations } };
+  if (!webSearch && output.webSourceIds.length) throw new ChatExecutionError("回答包含未获取的网页来源。");
+  const webSources = webSearch?.selectSources(output.webSourceIds) ?? [];
+  await completeChatRun(chatRun, answer, answerCitations, webSources);
+  yield { type: "complete", data: { citations: answerCitations, webSources } };
 }
