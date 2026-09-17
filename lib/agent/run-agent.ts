@@ -19,15 +19,13 @@ import {
 } from "@/lib/agent/run-state";
 import { MAX_WEB_SEARCH_CALLS } from "@/lib/agent/web-search";
 import { describeConversationContext } from "@/lib/chat/conversation-context";
+import { CHAT_MODEL, MAX_AGENT_STEPS, MAX_AGENT_OUTPUT_TOKENS } from "@/lib/chat/config";
+import type { createModelRecorder } from "@/lib/monitoring/recorder";
 
-/** D9 最多执行六个模型步骤，避免工具循环无限延长
+/** 最多执行八个模型步骤，避免工具循环无限延长。
  * 一个步骤可以理解成：模型收到当前上下文，生成一次回复或工具调用决定
  */
-export const MAX_AGENT_STEPS = 8;
-/** 每个模型步骤的输出上限，配合步骤和工具总数限制费用。 */
-export const MAX_AGENT_OUTPUT_TOKENS = 1_200;
-/** D1 已真实验证的主问答模型。 */
-const CHAT_MODEL = "alibaba/qwen3.7-flash";
+export { MAX_AGENT_STEPS, MAX_AGENT_OUTPUT_TOKENS } from "@/lib/chat/config";
 
 /** @param state 本轮快照与工具预算。 @param historyTruncated 较早对话是否因预算省略。 @param assertActive 本地工具和模型步骤入口的持久执行门禁。 @param webSearchEnabled 本轮联网授权。 */
 export function createVaultRunAgent(
@@ -35,6 +33,7 @@ export function createVaultRunAgent(
   historyTruncated: boolean,
   assertActive: () => Promise<void>,
   webSearchEnabled = false,
+  observation?: ReturnType<typeof createModelRecorder>,
 ) {
   /** 两个阶段共用的行为与证据边界，切换职责时始终保留
    * 始终生效得基础规则
@@ -74,7 +73,9 @@ export function createVaultRunAgent(
     "每步必须选择下一项工具操作：缺少证据且还有适用工具则继续收集；原问题已解决，或实际尝试后确认无法继续时才调用 finish_research。仅查到文件名但未读正文，不满足文件介绍或概括任务；没有尝试搜索不等于无法继续。不以自由文本直接结束，不重复查询。",
   ].join("\n");
 
+  observation?.setPromptHashes([initialInstructions, researchInstructions]);
   return new ToolLoopAgent({
+    ...observation,
     model: gateway(CHAT_MODEL),
     instructions: initialInstructions,
     tools: createVaultTools(state, assertActive, webSearchEnabled),

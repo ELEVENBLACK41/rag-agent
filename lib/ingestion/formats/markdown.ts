@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-13
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent Markdown 结构感知解析器。
  *
  * DAY8 保留标题路径、段落、Obsidian 引用语义，并将 fenced code block 作为独立的
@@ -17,7 +17,7 @@ import type {
 } from "@/lib/ingestion/formats/types";
 
 /** 单个文本块允许的最大字符数，避免长段落或代码撑大后续检索上下文。 */
-const MAX_CHUNK_CHARACTERS = 1_400;
+import { MAX_CHUNK_CHARACTERS } from "@/lib/ingestion/formats/chunking-config";
 /** 判断链接目标是否为附件。 */
 const ATTACHMENT_EXTENSION =
   /\.(?:png|jpe?g|gif|webp|pdf|docx|xlsx)(?:$|[?#])/i;

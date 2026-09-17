@@ -21,6 +21,11 @@ import {
 } from "@/lib/chat/run-lifecycle";
 import { readSnapshotSources } from "@/lib/sources/reader";
 import { readFileInventory } from "@/lib/sources/file-inventory";
+import { CHAT_MODEL, MAX_OUTPUT_TOKENS } from "@/lib/chat/config";
+import { createModelRecorder, recordObservation } from "@/lib/monitoring/recorder";
+import { getEffectiveConfiguration } from "@/lib/monitoring/configuration";
+import { createHash } from "node:crypto";
+import { createToolRecorder } from "@/lib/monitoring/tool-recorder";
 import type {
   ChatRun,
   ChatStreamEvent,
@@ -29,9 +34,7 @@ import type {
 export class ChatExecutionError extends Error {}
 
 /** Agent 与最终回答共同使用的已验证主模型。 */
-const CHAT_MODEL = "alibaba/qwen3.7-flash";
 /** 最终回答输出上限，避免上下文与费用无界增长。 */
-const MAX_OUTPUT_TOKENS = 3_600;
 
 /**
  * 未调用工具时直接完成回答；调用工具后执行受限证据收集与独立最终生成。
@@ -51,13 +54,15 @@ export async function* executeChatRun(
   question: string,
   control: { signal: AbortSignal; assertActive: () => Promise<void> },
 ): AsyncGenerator<ChatStreamEvent> {
+  await recordObservation(chatRun.runId, "configuration", "configuration", getEffectiveConfiguration());
   const state = createVaultRunState(chatRun.snapshotId, {
     onRetrievalTrace: async (trace) => { await appendRunEvent(chatRun.runId, "retrieval_trace", trace); },
   });
   /** 两个模型阶段共享相同的最近完整对话，本轮问题只追加一次。 */
   const context = await loadConversationContext(chatRun, question);
   const webSearch = chatRun.webSearchEnabled ? createWebSearchEvidence() : undefined;
-  const agent = createVaultRunAgent(state, context.truncated, control.assertActive, chatRun.webSearchEnabled);
+  await recordObservation(chatRun.runId, "context", "context", { truncated: context.truncated, messageCount: context.messages.length, webSearchEnabled: chatRun.webSearchEnabled });
+  const agent = createVaultRunAgent(state, context.truncated, control.assertActive, chatRun.webSearchEnabled, createModelRecorder(chatRun.runId, "research"));
   /** context.messages大概是
    * { role: "user", content: "上一个问题" },
    * { role: "assistant", content: "上一个回答" },
@@ -68,6 +73,7 @@ export async function* executeChatRun(
     string,
     { json: string; briefing: string }
   >();
+  const toolRecorder = createToolRecorder(chatRun.runId);
   const textStreams = new Map<string, string>();
   /** 公开文本同时作为待核验草稿；使用工具后的文本展示在执行过程区。 */
   const publicDraft = createPublicAnswerDraft();
@@ -135,6 +141,7 @@ export async function* executeChatRun(
       toolInputStreams.set(part.id, inputStream);
     }
     if (part.type === "tool-call") {
+      await toolRecorder.start(part.toolCallId, part.toolName);
       const briefing = getPublicBriefing(part.input);
       if (part.toolName === "finish_research" && briefing) {
         publicDraft.append(
@@ -161,6 +168,7 @@ export async function* executeChatRun(
       // Gateway 原生工具也可能用正常 tool-result 返回错误，不能一律标记成功。
       const webStatus = part.toolName === "search_web" ? webSearch?.collect(part.output) ?? "failed" : undefined;
       if (webStatus === "failed") hasToolError = true;
+      await toolRecorder.finish(part.toolCallId, part.toolName, webStatus === "failed", part.output);
       if (
         (part.toolName === "search_notes" ||
           part.toolName === "find_related") &&
@@ -181,6 +189,7 @@ export async function* executeChatRun(
       });
     }
     if (part.type === "tool-error") {
+      await toolRecorder.finish(part.toolCallId, part.toolName, true);
       hasToolError = true;
       yield createToolEvent({
         toolCallId: part.toolCallId,
@@ -232,20 +241,28 @@ export async function* executeChatRun(
   /** partialOutputStream 只提供对象增量；模型错误另行捕获，不能将半段答案保存为成功。 */
   let finalStreamError: unknown;
   await control.assertActive();
+  const finalInstruction = buildFinalInstruction({
+    webSources: webEvidence,
+    sources,
+    citations,
+    hasSearched,
+    hasToolError,
+    publicDraft: publicDraft.getDraft(),
+    fileInventory,
+    historyTruncated: context.truncated,
+  });
+  await recordObservation(chatRun.runId, "answer-context", "context", {
+    readChunkIds: sources.map((source) => source.chunkId),
+    promptHash: createHash("sha256").update(finalInstruction).digest("hex"),
+  });
+  const answerRecorder = createModelRecorder(chatRun.runId, "answer");
+  answerRecorder.setPromptHashes([finalInstruction]);
   const finalResult = streamText({
+    ...answerRecorder,
     model: gateway(CHAT_MODEL),
     abortSignal: control.signal,
     maxRetries: 0,
-    system: buildFinalInstruction({
-      webSources: webEvidence,
-      sources,
-      citations,
-      hasSearched,
-      hasToolError,
-      publicDraft: publicDraft.getDraft(),
-      fileInventory,
-      historyTruncated: context.truncated,
-    }),
+    system: finalInstruction,
     messages: context.messages,
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     reasoning: "none",

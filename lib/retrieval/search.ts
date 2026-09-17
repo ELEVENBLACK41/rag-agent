@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-16
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent DAY8 已发布快照的混合检索与重排序。
  *
  * 本模块只读取固定快照：关键词、向量、RRF 与 rerank 的每一步都返回不含正文的
@@ -13,6 +13,7 @@
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { cosineDistance } from "drizzle-orm/sql/functions/vector";
 import { embed, gateway, rerank } from "ai";
+import { randomUUID } from "node:crypto";
 import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
@@ -43,9 +44,10 @@ import type {
 
 export type { RetrievedChunk, RetrievalResult, RetrievalTrace } from "@/lib/retrieval/types";
 
-type VectorCandidateResult =
+type VectorCandidateResult = (
   | { status: "completed"; candidates: RetrievedChunk[] }
-  | { status: "fallback"; reason: string; candidates: RetrievedChunk[] };
+  | { status: "fallback"; reason: string; candidates: RetrievedChunk[] }
+) & { embedding?: NonNullable<RetrievalTrace["execution"]>["embedding"] };
 
 type RerankExecution = { chunks: RetrievedChunk[]; trace: RerankTrace };
 
@@ -97,25 +99,40 @@ export async function retrievePublishedChunksWithTrace(
   question: string,
   abortSignal?: AbortSignal,
 ): Promise<RetrievalResult> {
+  const startedAt = Date.now();
+  let keywordMs = 0;
+  let vectorMs = 0;
   //从keyword提取出来的关键词keywordTerms
   const keywordTerms = extractKeywordTerms(question);
   const activeFileVersionIds = await getActiveSnapshotFileVersionIds(snapshotId);
   const [keywordCandidates, vectorResult] = await Promise.all([
     //关键词候选
-    retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds),
+    timedRetrieval(() => retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds), (ms) => { keywordMs = ms; }),
     //向量候选
-    retrieveVectorCandidates(snapshotId, question, activeFileVersionIds, abortSignal),
+    timedRetrieval(() => retrieveVectorCandidates(snapshotId, question, activeFileVersionIds, abortSignal), (ms) => { vectorMs = ms; }),
   ]);
-  const fusedCandidates = fuseWithRrf<RetrievedChunk>(
+  const fusionStartedAt = Date.now();
+  const allFusedCandidates = fuseWithRrf<RetrievedChunk>(
     keywordCandidates,
     vectorResult.candidates,
     RRF_RANK_CONSTANT,
-  )
+  );
+  const fusedCandidates = allFusedCandidates
     .slice(0, RERANK_CANDIDATE_LIMIT)
     .map((candidate, index) => ({ ...candidate, fusionRank: index + 1 }));
+  const fusionMs = Date.now() - fusionStartedAt;
   const reranked = await rerankCandidates(question, fusedCandidates, abortSignal);
 
   const trace: RetrievalTrace = {
+    execution: {
+      queryId: randomUUID(), snapshotId, durationMs: Date.now() - startedAt,
+      keywordMs, vectorMs, fusionMs, fusedUniqueCount: allFusedCandidates.length,
+      embedding: vectorResult.embedding ?? null,
+      keyword: keywordCandidates.map((candidate, index) => ({ chunkId: candidate.chunkId, rank: index + 1 })),
+      vector: vectorResult.candidates.map((candidate, index) => ({ chunkId: candidate.chunkId, rank: index + 1, similarity: candidate.similarity })),
+      fused: fusedCandidates.map((candidate, index) => ({ chunkId: candidate.chunkId, rank: index + 1, rrfScore: candidate.rrfScore ?? null })),
+      final: reranked.chunks.map((candidate, index) => ({ chunkId: candidate.chunkId, rank: index + 1, rerankScore: candidate.rerankScore ?? null })),
+    },
     version: "day8-hybrid-v2-latest-file",
     keywordTerms,
     keywordCandidateIds: keywordCandidates.map((candidate) => candidate.chunkId),
@@ -188,6 +205,8 @@ async function retrieveVectorCandidates(
   activeFileVersionIds: string[],
   abortSignal?: AbortSignal,
 ): Promise<VectorCandidateResult> {
+  let embeddingTrace: NonNullable<RetrievalTrace["execution"]>["embedding"] = null;
+  let embeddingStartedAt: number | null = null;
   try {
     if (!activeFileVersionIds.length) {
       return { status: "completed", candidates: [] };
@@ -197,11 +216,13 @@ async function retrieveVectorCandidates(
     }
     // 官方：https://ai-sdk.dev/docs/reference/ai-sdk-core/embed；取消传播到查询向量请求。
     abortSignal?.throwIfAborted();
-    const { embedding } = await embed({
+    embeddingStartedAt = Date.now();
+    const { embedding, usage } = await embed({
       abortSignal,
       model: gateway.embeddingModel(EMBEDDING_MODEL), // 使用 Gateway Embedding 模型
       value: question, // 用户问题文本,用户的问题文本只向量化一次，所以不会用到embedMany
     });
+    embeddingTrace = { modelId: EMBEDDING_MODEL, status: "completed", durationMs: Date.now() - embeddingStartedAt, tokens: usage.tokens ?? null };
     if (
       embedding.length !== EMBEDDING_DIMENSIONS ||
       embedding.some((value) => !Number.isFinite(value))
@@ -236,6 +257,7 @@ async function retrieveVectorCandidates(
       .limit(RETRIEVAL_CANDIDATE_LIMIT);
     return {
       status: "completed" as const,
+      embedding: embeddingTrace,
       candidates: rows.map((row) => ({
         ...toRetrievedChunk(row),
         similarity: Number(row.similarity),
@@ -247,6 +269,7 @@ async function retrieveVectorCandidates(
       status: "fallback" as const,
       reason: getSafeRetrievalError(error),
       candidates: [],
+      embedding: embeddingTrace ?? (embeddingStartedAt === null ? null : { modelId: EMBEDDING_MODEL, status: "failed", durationMs: Date.now() - embeddingStartedAt, tokens: null }),
     };
   }
 }
@@ -427,6 +450,12 @@ function toRetrievedChunk(row: {
 
 /** 避免把 Gateway 原始响应、密钥痕迹或内部堆栈写进可见检索 Trace。 */
 function getSafeRetrievalError(error: unknown) {
-  if (error instanceof Error) return error.message.slice(0, 240);
+  if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) return "检索服务超时或已中止。";
   return "检索服务发生未知错误。";
+}
+
+/** @param action 检索路径。 @param record 接收该路径独立耗时；并行路径不能相加当总耗时。 */
+async function timedRetrieval<T>(action: () => Promise<T>, record: (milliseconds: number) => void): Promise<T> {
+  const startedAt = Date.now();
+  try { return await action(); } finally { record(Date.now() - startedAt); }
 }

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-16
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent 核心业务数据表定义。
  *
  * 表定义覆盖不可变文件版本、候选快照、解析 Chunk 与视觉派生资产。视觉资产以
@@ -348,3 +348,13 @@ export const runEvents = pgTable(
     index("run_events_run_id_idx").on(table.runId),
   ],
 );
+
+/** 管理观测独立于公开 SSE；相同调用标识幂等更新，避免重连重复计费。 */
+export const runObservations = pgTable("run_observations", {
+  runId: varchar("run_id", { length: 64 }).notNull()
+    .references(() => runs.id, { onDelete: "cascade" }),
+  observationId: varchar("observation_id", { length: 160 }).notNull(),
+  kind: varchar("kind", { length: 32 }).notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [uniqueIndex("run_observations_identity_uq").on(table.runId, table.observationId)]);

@@ -1,11 +1,11 @@
 /**
- * 修改时间：2026-09-10 | 文件说明：VaultAgent TXT 纯文本格式解析器 | edit by：Sliye
+ * 修改时间：2026-09-17 | 文件说明：VaultAgent TXT 纯文本格式解析器 | edit by：Sliye
  */
 
 import type { ParsedTextChunk } from "@/lib/ingestion/formats/types";
 
 /** TXT 单块最大字符数，与 Markdown 保持同一检索载荷上限。 */
-const MAX_CHUNK_CHARACTERS = 1_400;
+import { MAX_CHUNK_CHARACTERS } from "@/lib/ingestion/formats/chunking-config";
 
 /**
  * 按空行切分纯文本并保留行号。TXT 没有标题或 Obsidian 语义，定位结构保持为空。

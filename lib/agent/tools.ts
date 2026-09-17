@@ -11,7 +11,7 @@
  */
 
 import { gateway, tool } from "ai";
-import { MAX_WEB_SOURCES } from "@/lib/agent/web-search";
+import { MAX_WEB_SOURCES, WEB_SEARCH_TOKEN_BUDGET, WEB_SEARCH_PAGE_TOKEN_BUDGET } from "@/lib/agent/web-search";
 import { z } from "zod";
 import { retrievePublishedChunksWithTrace } from "@/lib/retrieval/search";
 import { readSnapshotSources } from "@/lib/sources/reader";
@@ -36,8 +36,8 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
       ? {
           search_web: gateway.tools.perplexitySearch({
             maxResults: MAX_WEB_SOURCES,
-            maxTokens: 3_000,
-            maxTokensPerPage: 600,
+            maxTokens: WEB_SEARCH_TOKEN_BUDGET,
+            maxTokensPerPage: WEB_SEARCH_PAGE_TOKEN_BUDGET,
           }),
         }
       : {}),

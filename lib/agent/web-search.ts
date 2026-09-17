@@ -6,6 +6,10 @@ import type { WebSource } from "@/lib/chat/types";
 export const MAX_WEB_SOURCES = 5;
 /** 模型步骤之间检查搜索次数，达到阈值后不再开放搜索工具。 */
 export const MAX_WEB_SEARCH_CALLS = 2;
+/** 单次搜索返回摘要的总 Token 预算。 */
+export const WEB_SEARCH_TOKEN_BUDGET = 3_000;
+/** 单页摘要 Token 预算，不代表抓取全文。 */
+export const WEB_SEARCH_PAGE_TOKEN_BUDGET = 600;
 /** 只读取业务需要的供应商结果字段；错误或格式异常不能冒充无结果。 */
 const searchResultSchema = z.object({
   results: z.array(z.object({ title: z.string(), url: z.string(), snippet: z.string() })),
