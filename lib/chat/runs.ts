@@ -83,10 +83,14 @@ export async function* executeChatRun(
   let hasSearched = false;
   /** 无证据且工具失败时仍保留异常，不能把服务故障包装成普通无答案。 */
   let hasToolError = false;
+  /** 原生搜索可在同一步内部执行并续写；此时 prepareStep 尚未切换到收集职责。 */
+  let nativeSearchContinuation = false;
 
   // stream 同时提供模型文本和工具参数增量；只发布公开文本，不读取 reasoning。
   for await (const part of agentResult.stream) {
     control.signal.throwIfAborted();
+    if (part.type === "start-step") nativeSearchContinuation = false;
+    if (part.type === "tool-call" && part.toolName === "search_web") nativeSearchContinuation = true;
     if (
       !hasUsedTools &&
       (part.type === "tool-input-start" || part.type === "tool-call")
@@ -102,6 +106,9 @@ export async function* executeChatRun(
     if (part.type === "text-delta") {
       const stageId = `text:${part.id}`;
       publicDraft.append(stageId, "public-text", part.text);
+      // 供应商同一步搜索后的自由正文没有经过收集阶段约束，只作为待核验草稿。
+      // 不按文本长度或关键词过滤，不影响下一步真实的简短进展与工具 briefing。
+      if (nativeSearchContinuation) continue;
       const current = textStreams.get(part.id) ?? "";
       const delta = part.text;
       if (delta) {

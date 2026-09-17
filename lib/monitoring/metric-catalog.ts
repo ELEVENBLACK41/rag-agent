@@ -30,7 +30,7 @@ export const metricCatalog = [
     unit: "Token、USD",
     meaning: "输入、输出、缓存、推理分别保存；总量不重复累计子项",
     missing:
-      "未返回 usage 显示未采集；费用尚未接入账单，不估造金额。步骤耗时包含工具执行",
+      "聊天模型步骤记录 Gateway 返回的 USD 费用与请求 ID，汇总显示覆盖步数；独立导入、Embedding、rerank 及平台账单尚未接入。缺失金额不作零，步骤耗时包含工具执行",
   },
   {
     group: "时延 / 可靠性",

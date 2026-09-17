@@ -11,6 +11,7 @@ import {
 import { durationLabel } from "@/components/monitoring/monitor-panel";
 import type { getMonitorRuns } from "@/lib/monitoring/repository";
 import { summarizeRuns } from "@/lib/monitoring/statistics";
+import { formatUsd } from "@/lib/monitoring/gateway-cost";
 
 /** @param rows 服务端已经按权限和筛选范围读取的运行。 */
 export function RunTable({
@@ -36,6 +37,7 @@ export function RunTable({
           <TableHead>总耗时</TableHead>
           <TableHead>已知 Token</TableHead>
           <TableHead>模型 / 工具调用</TableHead>
+          <TableHead>Gateway 已知费用（USD）</TableHead>
           <TableHead>运行</TableHead>
         </TableRow>
       </TableHeader>
@@ -79,6 +81,7 @@ export function RunTable({
             </TableCell>
             <TableCell>{summary.totalTokens ?? "未采集"}<span className="block text-xs text-muted-foreground">用量已知 {summary.knownUsageCalls}/{summary.modelCalls} 步</span></TableCell>
             <TableCell>{records.length ? `${summary.modelCalls} / ${toolCount}` : "未采集"}</TableCell>
+            <TableCell>{formatUsd(summary.costUsd)}<span className="block text-xs text-muted-foreground">费用已知 {summary.knownCostCalls}/{summary.modelCalls} 步</span></TableCell>
             <TableCell>
               <Link
                 className="text-link underline"

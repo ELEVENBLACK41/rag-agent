@@ -43,7 +43,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
       : {}),
     list_files: tool({
       description:
-        "列出当前已发布知识库快照的文件名、相对路径、格式和文件总数，不返回正文。仅回答有哪些文件、有多少文件时使用；若目标是介绍或概括文件，清单只能确定文件身份，之后仍须 search_notes 搜索并 read_sources 读取正文。已从上下文明确目标文件时可直接搜索，不必重复列清单。总数以返回值为准，每页最多 30 个；完整清单且 nextOffset 非空时在预算内继续翻页，未读全须说明范围。",
+        "仅在用户要求查看知识库文件名称、数量、清单，或具体资料任务需要先确认文件身份时调用。纯问候、寒暄、致谢不能调用，不主动给用户展示知识库。返回当前已发布快照的文件名、相对路径、格式和文件总数，不返回正文。若目标是介绍或概括文件，清单只能确定文件身份，之后仍须 search_notes 搜索并 read_sources 读取正文。已从上下文明确目标文件时可直接搜索，不必重复列清单。总数以返回值为准，每页最多 30 个；完整清单且 nextOffset 非空时在预算内继续翻页，未读全须说明范围。",
       inputSchema: z.object({ //z来自Zod数据校验库,这个工具接受一个对象,必须有briefing,offset
         briefing: z
           .string()

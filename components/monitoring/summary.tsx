@@ -1,6 +1,7 @@
 /** 修改时间：2026-09-17 | 文件说明：带样本和覆盖率的运行汇总 | edit by：Sliye */
 import type { summarizeRuns } from "@/lib/monitoring/statistics";
 import { durationLabel } from "@/components/monitoring/monitor-panel";
+import { formatUsd } from "@/lib/monitoring/gateway-cost";
 
 /** @param summary 当前筛选样本统计。 */
 export function RunSummary({
@@ -21,7 +22,8 @@ export function RunSummary({
     ["已采集模型步骤", s.modelCalls],
     ["已知 Token 小计", s.totalTokens ?? "未采集"],
     ["用量覆盖（已知 / 已记录步骤）", `${s.knownUsageCalls} / ${s.modelCalls}`],
-    ["费用", s.costUsd == null ? "待对账" : `$${s.costUsd.toFixed(4)}`],
+    ["Gateway 已知费用小计（USD）", formatUsd(s.costUsd)],
+    ["费用覆盖（已知 / 已记录步骤）", `${s.knownCostCalls} / ${s.modelCalls}`],
   ];
   return (
     <>
@@ -37,6 +39,7 @@ export function RunSummary({
         耗时包含排队；分位数采用 nearest-rank，覆盖 {s.durationSampleCount}{" "}
         个已有终态的 Run（包含失败和取消）。Token 仅统计已有观测的模型步骤，旧
         Run 和未返回用量的请求不视为零；不含导入与查询向量用量。
+        费用仅汇总聊天模型步骤的 Gateway 返回金额；缺失步骤、独立导入、Embedding 和 rerank 费用未纳入，不代表完整平台账单。
       </p>
     </>
   );

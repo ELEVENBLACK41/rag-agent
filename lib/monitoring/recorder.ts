@@ -4,6 +4,7 @@ import { withLockedRun } from "@/lib/chat/run-lifecycle";
 import type { LanguageModelUsage } from "ai";
 import type { ModelObservation } from "@/lib/monitoring/types";
 import { createHash } from "node:crypto";
+import { readGatewayCost } from "@/lib/monitoring/gateway-cost";
 
 /** @param runId 当前运行。 @param id 稳定的观测标识。 @param kind 分类。 @param payload 仅允许调用处明确构造的脱敏字段。 */
 export async function recordObservation(
@@ -72,6 +73,7 @@ export function createModelRecorder(
       usage: LanguageModelUsage;
       finishReason: string;
       response: { modelId: string };
+      providerMetadata?: unknown;
       model: { provider: string };
       performance: { responseTimeMs: number; stepTimeMs: number; toolExecutionMs: Readonly<Record<string, number>>; timeToFirstOutputMs: number | undefined };
     }) {
@@ -85,7 +87,7 @@ export function createModelRecorder(
         startedAt: startedAt.toISOString(),
         durationMs: Date.now() - startedAt.getTime(),
         usage: selectUsage(event.usage),
-        costUsd: null,
+        ...readGatewayCost(event.providerMetadata),
         finishReason: event.finishReason,
         modelResponseMs: event.performance.responseTimeMs,
         stepTimeMs: event.performance.stepTimeMs,
