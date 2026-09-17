@@ -6,7 +6,7 @@
  * @FilePath: \rag-agent\lib\chat\run-execution.ts
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
-/** 修改时间：2026-09-16 | 文件说明：持久执行认领、服务端取消监视与模型执行边界 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：持久执行认领、联网授权恢复、取消监视与模型执行边界 | edit by：Sliye */
 import { and, eq } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { messages, runEvents } from "@/lib/db/schema";
@@ -38,10 +38,14 @@ async function claimChatRun(runId: string) {
       return null;
     }
     await insertRunEvent(tx, runId, "execution_started", {});
+    // 旧 Run 没有联网选项时保持关闭，不能从会话历史推断授权。
+    const [configuration] = await tx.select({ payload: runEvents.payload }).from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.eventType, "run_started"))).limit(1);
     return {
       runId,
       conversationId: run.conversationId,
       snapshotId: run.snapshotId,
+      webSearchEnabled: !!configuration?.payload && typeof configuration.payload === "object" && "webSearchEnabled" in configuration.payload && configuration.payload.webSearchEnabled === true,
     };
   });
 }

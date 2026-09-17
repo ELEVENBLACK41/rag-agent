@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：问答 Run 创建、独立重试关联与受权事件读取 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：问答 Run 创建、联网选项持久化、重试与受权事件读取 | edit by：Sliye */
 import { randomUUID } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
@@ -13,10 +13,10 @@ import { insertRunEvent, reconcileChatRun } from "@/lib/chat/run-lifecycle";
  * 创建单轮问答 Run，开始后始终固定在当前已发布快照上。
  *
  * @param question 已校验的用户问题。
- * @param conversationId 可选的既有会话标识；未提供时创建新会话。
- * @param retryRunId 用户主动重试的旧尝试，必须属于同会话且已经失败或取消。
+ * @param options 会话、主动重试标识及本轮联网授权；重试必须属于同会话且已经失败或取消。
  */
-export async function createChatRun(question: string, conversationId?: string, retryRunId?: string): Promise<ChatRun> {
+export async function createChatRun(question: string, options: { conversationId?: string; retryRunId?: string; webSearchEnabled: boolean }): Promise<ChatRun> {
+  const { conversationId, retryRunId, webSearchEnabled } = options;
   await ensureLocalPrincipal();
   const snapshot = await getLatestPublishedSnapshot(LOCAL_WORKSPACE_ID);
 
@@ -126,11 +126,11 @@ export async function createChatRun(question: string, conversationId?: string, r
       runId,
       sequence: 1,
       eventType: "run_started",
-      payload: { message: "正在处理问题" },
+      payload: { message: "正在处理问题", webSearchEnabled },
     });
   });
 
-  return { conversationId: resolvedConversationId, runId, snapshotId: snapshot?.id ?? null };
+  return { conversationId: resolvedConversationId, runId, snapshotId: snapshot?.id ?? null, webSearchEnabled };
 }
 
 /**

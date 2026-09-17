@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：聊天消息、执行过程和来源卡片的展示组合 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：聊天消息、执行过程、本地与网页来源展示组合 | edit by：Sliye */
 "use client";
 import {
   Conversation,
@@ -12,9 +12,10 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import { RunProcess } from "@/components/chat/run-process";
+import { Sources, SourcesTrigger, SourcesContent, Source } from "@/components/ai-elements/sources";
 import { MessageImageGallery } from "@/components/chat/message-image-gallery";
 import { Button } from "@/components/ui/button";
-import { FileTextIcon, ImageIcon } from "lucide-react";
+import { ChevronDownIcon, FileTextIcon, ImageIcon } from "lucide-react";
 import type { ChatMessage } from "@/lib/chat/types";
 import type { SourceCitation as Citation } from "@/lib/sources/types";
 
@@ -102,6 +103,19 @@ export function ChatMessageList({
                 </p>
               )}
               {/* 图片渲染会话中 */}
+              {message.role === "assistant" && !!message.webSources?.length && (
+                <Sources className="text-link">
+                  <SourcesTrigger count={message.webSources.length}>
+                    <span className="text-sm">网页来源 · {message.webSources.length}</span>
+                    <ChevronDownIcon className="size-3.5" />
+                  </SourcesTrigger>
+                  <SourcesContent>
+                    {message.webSources.map((source) => (
+                      <Source key={source.url} href={source.url} title={source.title} />
+                    ))}
+                  </SourcesContent>
+                </Sources>
+              )}
               {message.role === "assistant" && message.runId &&
                 !!message.citations?.some((citation) => citation.displayImage) && (
                   <MessageImageGallery

@@ -23,7 +23,9 @@ import {
   markImportBatchRunning,
   markImportReady,
   publishImportBatch as publishBatch,
+  updateImportBatchProgress,
 } from "@/lib/ingestion/imports";
+import type { ImportProgressStage } from "@/lib/ingestion/imports";
 import { replaceImportDiagnostics } from "@/lib/ingestion/import-diagnostics";
 import { analyzeInheritedMarkdownVisualImages } from "@/lib/ingestion/visual/markdown-image-analysis";
 import { analyzeImportVisualAssets } from "@/lib/ingestion/visual/registry";
@@ -54,8 +56,12 @@ export async function listBatchIndexableImports(batchId: string) {
  * 读取一个可索引文件、交由格式注册表解析，并幂等保存统一 Chunk。
  *
  * @param importId 文件导入记录标识。
+ * @param progress 解析完成后要写入的批次进度；旧 Workflow 重放时可以省略。
  */
-export async function parseAndStoreChunks(importId: string) {
+export async function parseAndStoreChunks(
+  importId: string,
+  progress?: { batchId: string; endPercent: number },
+) {
   "use step";
 
   const db = getDatabase();
@@ -117,14 +123,29 @@ export async function parseAndStoreChunks(importId: string) {
       })),
     )
     .onConflictDoNothing();
+  if (progress) {
+    await updateImportBatchProgress(
+      progress.batchId,
+      progress.endPercent,
+      "visualizing",
+    );
+  }
 }
 
 /**
  * 按受限批次为已存文档块生成向量，原文不会进入 Workflow 状态。
  *
  * @param importId 文件导入记录标识。
+ * @param progress 每批 Chunk 完成后要写入的整体进度区间。
  */
-export async function embedStoredChunks(importId: string) {
+export async function embedStoredChunks(
+  importId: string,
+  progress?: {
+    batchId: string;
+    startPercent: number;
+    endPercent: number;
+  },
+) {
   "use step";
 
   if (!process.env.AI_GATEWAY_API_KEY)
@@ -175,25 +196,79 @@ export async function embedStoredChunks(importId: string) {
           .update(chunks)
           .set({ embedding: result.embeddings[batchIndex] })
           .where(eq(chunks.id, chunk.id)),
-      ),
+        ),
+    );
+    if (progress) {
+      const completedChunks = Math.min(
+        index + batch.length,
+        pendingChunks.length,
+      );
+      const ratio = completedChunks / pendingChunks.length;
+      await updateImportBatchProgress(
+        progress.batchId,
+        progress.startPercent +
+          (progress.endPercent - progress.startPercent) * ratio,
+        "embedding",
+      );
+    }
+  }
+  if (progress && !pendingChunks.length) {
+    await updateImportBatchProgress(
+      progress.batchId,
+      progress.endPercent,
+      "embedding",
     );
   }
   return pendingChunks.length;
 }
 
-/** 将完成解析和向量化的可索引文件标记为候选快照就绪。 */
-export async function markIndexableImportReady(importId: string) {
+/**
+ * 将完成解析和向量化的可索引文件标记为候选快照就绪。
+ *
+ * @param importId 文件导入记录标识。
+ * @param progress 文件完成后的批次进度及下一阶段。
+ */
+export async function markIndexableImportReady(
+  importId: string,
+  progress?: {
+    batchId: string;
+    endPercent: number;
+    nextStage: ImportProgressStage;
+  },
+) {
   "use step";
   await markImportReady(importId);
+  if (progress) {
+    await updateImportBatchProgress(
+      progress.batchId,
+      progress.endPercent,
+      progress.nextStage,
+    );
+  }
 }
 
-/** 对当前可索引文件的受限视觉候选执行分析，格式模块自行决定是否有候选。 */
+/**
+ * 对当前可索引文件的受限视觉候选执行分析，格式模块自行决定是否有候选。
+ *
+ * @param importId 文件导入记录标识。
+ * @param mediaType 已校验的文件媒体类型。
+ * @param progress 视觉步骤完成后要写入的批次进度。
+ */
 export async function analyzeIndexableImportVisualAssets(
   importId: string,
   mediaType: string,
+  progress?: { batchId: string; endPercent: number },
 ) {
   "use step";
-  return analyzeImportVisualAssets(importId, mediaType);
+  const result = await analyzeImportVisualAssets(importId, mediaType);
+  if (progress) {
+    await updateImportBatchProgress(
+      progress.batchId,
+      progress.endPercent,
+      "embedding",
+    );
+  }
+  return result;
 }
 
 /**
@@ -202,7 +277,10 @@ export async function analyzeIndexableImportVisualAssets(
  */
 export async function analyzeInheritedMarkdownAssets(batchId: string) {
   "use step";
-  return analyzeInheritedMarkdownVisualImages(batchId);
+  await updateImportBatchProgress(batchId, 90, "visualizing");
+  const importIds = await analyzeInheritedMarkdownVisualImages(batchId);
+  await updateImportBatchProgress(batchId, 95, "embedding");
+  return importIds;
 }
 
 /** 记录一个文件的具体失败，以便批次状态接口保留真实失败来源。 */
@@ -214,6 +292,7 @@ export async function failIndexableImport(importId: string, message: string) {
 /** 以一个事务发布候选快照。 */
 export async function publishImportBatch(batchId: string) {
   "use step";
+  await updateImportBatchProgress(batchId, 99, "finalizing");
   await publishBatch(batchId);
 }
 

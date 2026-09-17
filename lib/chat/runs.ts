@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：多步问答执行、证据交接与最终答案流式生成
+/** 修改时间：2026-09-17 | 文件说明：多步问答执行、本地与网页证据交接及最终答案流式生成
  * 
  *  服务端执行编排层，同时也是服务端事件流的生产者
  * 
@@ -7,13 +7,13 @@ import { gateway, Output, streamText } from "ai";
 import { createStageUpdate, completeStage, getPartialBriefing, createToolEvent, getPublicBriefing, describeToolActivity } from "@/lib/chat/run-progress";
 import { createVaultRunAgent } from "@/lib/agent/run-agent";
 import { createVaultRunState } from "@/lib/agent/run-state";
+import { createWebSearchEvidence } from "@/lib/agent/web-search";
 import { selectAnswerCitations } from "@/lib/chat/citations";
 import {
   buildFinalInstruction,
   finalAnswerSchema,
 } from "@/lib/chat/final-answer";
 import { createPublicAnswerDraft } from "@/lib/chat/public-draft";
-import { removeUntrustedImageMarkup } from "@/lib/chat/answer-content";
 import { loadConversationContext } from "@/lib/chat/conversation-context";
 import {
   appendRunEvent,
@@ -21,6 +21,11 @@ import {
 } from "@/lib/chat/run-lifecycle";
 import { readSnapshotSources } from "@/lib/sources/reader";
 import { readFileInventory } from "@/lib/sources/file-inventory";
+import { CHAT_MODEL, MAX_OUTPUT_TOKENS } from "@/lib/chat/config";
+import { createModelRecorder, recordObservation } from "@/lib/monitoring/recorder";
+import { getEffectiveConfiguration } from "@/lib/monitoring/configuration";
+import { createHash } from "node:crypto";
+import { createToolRecorder } from "@/lib/monitoring/tool-recorder";
 import type {
   ChatRun,
   ChatStreamEvent,
@@ -29,9 +34,7 @@ import type {
 export class ChatExecutionError extends Error {}
 
 /** Agent 与最终回答共同使用的已验证主模型。 */
-const CHAT_MODEL = "alibaba/qwen3.7-flash";
 /** 最终回答输出上限，避免上下文与费用无界增长。 */
-const MAX_OUTPUT_TOKENS = 3_600;
 
 /**
  * 未调用工具时直接完成回答；调用工具后执行受限证据收集与独立最终生成。
@@ -51,12 +54,15 @@ export async function* executeChatRun(
   question: string,
   control: { signal: AbortSignal; assertActive: () => Promise<void> },
 ): AsyncGenerator<ChatStreamEvent> {
+  await recordObservation(chatRun.runId, "configuration", "configuration", getEffectiveConfiguration());
   const state = createVaultRunState(chatRun.snapshotId, {
     onRetrievalTrace: async (trace) => { await appendRunEvent(chatRun.runId, "retrieval_trace", trace); },
   });
   /** 两个模型阶段共享相同的最近完整对话，本轮问题只追加一次。 */
   const context = await loadConversationContext(chatRun, question);
-  const agent = createVaultRunAgent(state, context.truncated, control.assertActive);
+  const webSearch = chatRun.webSearchEnabled ? createWebSearchEvidence() : undefined;
+  await recordObservation(chatRun.runId, "context", "context", { truncated: context.truncated, messageCount: context.messages.length, webSearchEnabled: chatRun.webSearchEnabled });
+  const agent = createVaultRunAgent(state, context.truncated, control.assertActive, chatRun.webSearchEnabled, createModelRecorder(chatRun.runId, "research"));
   /** context.messages大概是
    * { role: "user", content: "上一个问题" },
    * { role: "assistant", content: "上一个回答" },
@@ -67,6 +73,7 @@ export async function* executeChatRun(
     string,
     { json: string; briefing: string }
   >();
+  const toolRecorder = createToolRecorder(chatRun.runId);
   const textStreams = new Map<string, string>();
   /** 公开文本同时作为待核验草稿；使用工具后的文本展示在执行过程区。 */
   const publicDraft = createPublicAnswerDraft();
@@ -76,10 +83,14 @@ export async function* executeChatRun(
   let hasSearched = false;
   /** 无证据且工具失败时仍保留异常，不能把服务故障包装成普通无答案。 */
   let hasToolError = false;
+  /** 原生搜索可在同一步内部执行并续写；此时 prepareStep 尚未切换到收集职责。 */
+  let nativeSearchContinuation = false;
 
   // stream 同时提供模型文本和工具参数增量；只发布公开文本，不读取 reasoning。
   for await (const part of agentResult.stream) {
     control.signal.throwIfAborted();
+    if (part.type === "start-step") nativeSearchContinuation = false;
+    if (part.type === "tool-call" && part.toolName === "search_web") nativeSearchContinuation = true;
     if (
       !hasUsedTools &&
       (part.type === "tool-input-start" || part.type === "tool-call")
@@ -95,6 +106,9 @@ export async function* executeChatRun(
     if (part.type === "text-delta") {
       const stageId = `text:${part.id}`;
       publicDraft.append(stageId, "public-text", part.text);
+      // 供应商同一步搜索后的自由正文没有经过收集阶段约束，只作为待核验草稿。
+      // 不按文本长度或关键词过滤，不影响下一步真实的简短进展与工具 briefing。
+      if (nativeSearchContinuation) continue;
       const current = textStreams.get(part.id) ?? "";
       const delta = part.text;
       if (delta) {
@@ -134,6 +148,7 @@ export async function* executeChatRun(
       toolInputStreams.set(part.id, inputStream);
     }
     if (part.type === "tool-call") {
+      await toolRecorder.start(part.toolCallId, part.toolName);
       const briefing = getPublicBriefing(part.input);
       if (part.toolName === "finish_research" && briefing) {
         publicDraft.append(
@@ -157,6 +172,10 @@ export async function* executeChatRun(
       });
     }
     if (part.type === "tool-result") {
+      // Gateway 原生工具也可能用正常 tool-result 返回错误，不能一律标记成功。
+      const webStatus = part.toolName === "search_web" ? webSearch?.collect(part.output) ?? "failed" : undefined;
+      if (webStatus === "failed") hasToolError = true;
+      await toolRecorder.finish(part.toolCallId, part.toolName, webStatus === "failed", part.output);
       if (
         (part.toolName === "search_notes" ||
           part.toolName === "find_related") &&
@@ -170,17 +189,20 @@ export async function* executeChatRun(
       yield createToolEvent({
         toolCallId: part.toolCallId,
         toolName: part.toolName,
-        status: "completed",
-        message: describeToolActivity(part.toolName, "completed"),
+        status: webStatus === "failed" ? "failed" : "completed",
+        message: webStatus === "failed" ? "联网搜索失败，未取得本次结果"
+          : webStatus === "no-results" ? "联网搜索完成，未找到可用结果"
+            : describeToolActivity(part.toolName, "completed"),
       });
     }
     if (part.type === "tool-error") {
+      await toolRecorder.finish(part.toolCallId, part.toolName, true);
       hasToolError = true;
       yield createToolEvent({
         toolCallId: part.toolCallId,
         toolName: part.toolName,
         status: "failed",
-        message: describeToolActivity(part.toolName, "failed"),
+        message: part.toolName === "search_web" ? "联网搜索失败或超时，未取得本次结果" : describeToolActivity(part.toolName, "failed"),
       });
     }
     if (part.type === "error") throw part.error;
@@ -205,8 +227,9 @@ export async function* executeChatRun(
     chatRun.snapshotId && fileListOffsets.length
       ? await readFileInventory(chatRun.snapshotId, fileListOffsets)
       : null;
-  if (!citations.length && !fileInventory && hasToolError) {
-    throw new ChatExecutionError("知识库工具执行失败，未能取得可用证据，请稍后重试。");
+  const webEvidence = webSearch?.getEvidence() ?? [];
+  if (!citations.length && !fileInventory && !webEvidence.length && hasToolError) {
+    throw new ChatExecutionError("资料查询工具执行失败，未能取得可用证据，请稍后重试。");
   }
   const sources =
     citations.length && chatRun.snapshotId
@@ -225,19 +248,28 @@ export async function* executeChatRun(
   /** partialOutputStream 只提供对象增量；模型错误另行捕获，不能将半段答案保存为成功。 */
   let finalStreamError: unknown;
   await control.assertActive();
+  const finalInstruction = buildFinalInstruction({
+    webSources: webEvidence,
+    sources,
+    citations,
+    hasSearched,
+    hasToolError,
+    publicDraft: publicDraft.getDraft(),
+    fileInventory,
+    historyTruncated: context.truncated,
+  });
+  await recordObservation(chatRun.runId, "answer-context", "context", {
+    readChunkIds: sources.map((source) => source.chunkId),
+    promptHash: createHash("sha256").update(finalInstruction).digest("hex"),
+  });
+  const answerRecorder = createModelRecorder(chatRun.runId, "answer");
+  answerRecorder.setPromptHashes([finalInstruction]);
   const finalResult = streamText({
+    ...answerRecorder,
     model: gateway(CHAT_MODEL),
     abortSignal: control.signal,
     maxRetries: 0,
-    system: buildFinalInstruction({
-      sources,
-      citations,
-      hasSearched,
-      hasToolError,
-      publicDraft: publicDraft.getDraft(),
-      fileInventory,
-      historyTruncated: context.truncated,
-    }),
+    system: finalInstruction,
     messages: context.messages,
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     reasoning: "none",
@@ -271,12 +303,7 @@ export async function* executeChatRun(
     answer = output.answer;
     yield { type: "delta", data: { text: remaining } };
   }
-  const safeAnswer = removeUntrustedImageMarkup(answer);
-  if (!safeAnswer) throw new ChatExecutionError("模型没有返回可保存的回答。");
-  if (safeAnswer !== answer) {
-    answer = safeAnswer;
-    yield { type: "replace-answer", data: { text: answer } };
-  }
+  if (!answer.trim()) throw new ChatExecutionError("模型没有返回可保存的回答。");
   // 生成期间可能删除文件；清单发生变化时不能把已过期内容保存为成功回答。
   if (fileInventory && chatRun.snapshotId) {
     const available = await readFileInventory(
@@ -302,6 +329,8 @@ export async function* executeChatRun(
       throw new ChatExecutionError("回答引用的部分来源已不可用，请重新提问。");
   }
   control.signal.throwIfAborted();
-  await completeChatRun(chatRun, answer, answerCitations);
-  yield { type: "complete", data: { citations: answerCitations } };
+  if (!webSearch && output.webSourceIds.length) throw new ChatExecutionError("回答包含未获取的网页来源。");
+  const webSources = webSearch?.selectSources(output.webSourceIds) ?? [];
+  await completeChatRun(chatRun, answer, answerCitations, webSources);
+  yield { type: "complete", data: { citations: answerCitations, webSources } };
 }

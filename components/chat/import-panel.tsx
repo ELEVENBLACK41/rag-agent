@@ -14,12 +14,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import type { ImportBatchState, ImportFileState } from "@/components/chat/use-import-batch";
 
 type ImportPanelProps = {
   batch: ImportBatchState | null;
   error: string | null;
   files: ImportFileState[];
+  importProgress: number | null;
   isLoading: boolean;
   isUploading: boolean;
   onRemoveFile: (importId: string) => void;
@@ -27,7 +29,7 @@ type ImportPanelProps = {
 };
 
 /** 展示导入入口、批次状态和可删除的已保存文件。 */
-export function ImportPanel({ batch, error, files, isLoading, isUploading, onRemoveFile, onUpload }: ImportPanelProps) {
+export function ImportPanel({ batch, error, files, importProgress, isLoading, isUploading, onRemoveFile, onUpload }: ImportPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -43,7 +45,7 @@ export function ImportPanel({ batch, error, files, isLoading, isUploading, onRem
       <Card className="min-w-0 rounded-2xl ring-border [--card-spacing:--spacing(5)]">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base"><FolderUpIcon className="size-4" /> 导入知识库</CardTitle>
-          <CardDescription className="leading-relaxed">支持多选、拖拽或 ZIP。MD、TXT、PDF、DOCX 和 XLSX 会建立索引；图片作为附件保留。</CardDescription>
+          <CardDescription className="leading-relaxed">支持多选、拖拽或 ZIP。MD、TXT、PDF、DOCX 和 XLSX 会建立索引；图片作为附件保留。视觉分析单文件最多 20 张，整批最多 50 张。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div
@@ -73,7 +75,17 @@ export function ImportPanel({ batch, error, files, isLoading, isUploading, onRem
               type="file"
             />
           </div>
-          {isUploading && <Badge variant="secondary">正在保存并建立候选索引…</Badge>}
+          {isUploading && importProgress !== null && (
+            <div className="space-y-2" role="status" aria-live="polite">
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>
+                  {getImportProgressLabel(batch?.progressStage, importProgress)}
+                </span>
+                <span className="tabular-nums">{importProgress}%</span>
+              </div>
+              <Progress aria-label="整体导入进度" value={importProgress} />
+            </div>
+          )}
           {batch && <BatchStatus status={batch.status} />}
           {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         </CardContent>
@@ -147,6 +159,32 @@ function BatchStatus({ status }: { status: ImportBatchState["status"] }) {
     failed: "本批导入失败，旧资料仍可使用",
   };
   return <Badge variant={status === "failed" ? "destructive" : "secondary"}>{labels[status]}</Badge>;
+}
+
+/**
+ * 将服务端持久化的导入阶段转换为用户可见进度说明。
+ *
+ * @param stage 服务端当前阶段，网络上传期间尚不存在。
+ * @param progressPercent 当前整体百分比，用于区分上传与等待 Workflow。
+ */
+function getImportProgressLabel(
+  stage: ImportBatchState["progressStage"] | undefined,
+  progressPercent: number,
+) {
+  if (!stage)
+    return progressPercent >= 10
+      ? "文件已保存，正在启动处理"
+      : "正在上传文件";
+  const labels: Record<ImportBatchState["progressStage"], string> = {
+    queued: "文件已保存，正在排队",
+    parsing: "正在解析文档",
+    visualizing: "正在进行视觉识别",
+    embedding: "正在生成向量索引",
+    finalizing: "正在发布知识库快照",
+    completed: "导入完成",
+    failed: "导入失败",
+  };
+  return labels[stage];
 }
 
 function getFileStatusLabel(status: string, mediaType: string) {

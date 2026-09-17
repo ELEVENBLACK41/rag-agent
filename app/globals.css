@@ -1,4 +1,4 @@
-/* 修改时间：2026-09-16 | 文件说明：全局主题与聊天排版样式 | edit by：Sliye */
+/* 修改时间：2026-09-17 | 文件说明：全局主题、链接语义色与聊天排版样式 | edit by：Sliye */
 @import "tailwindcss";
 /* Tailwind 在 Windows + Turbopack 下无法解析该包仅提供 style 条件的根导出，直接引入其发布的样式文件。 */
 @import "../node_modules/tw-animate-css/dist/tw-animate.css";
@@ -12,6 +12,7 @@
   --color-background: var(--background);
   --color-chat-user: var(--chat-user);
   --color-chat-user-foreground: var(--chat-user-foreground);
+  --color-link: var(--link);
   --color-foreground: var(--foreground);
   --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
@@ -56,6 +57,7 @@
 }
 
 :root {
+  --link: oklch(0.52 0.2 255);
   --chat-user: oklch(0.96 0.022 245);
   --chat-user-foreground: oklch(0.35 0.055 245);
   --background: oklch(1 0 0);
@@ -94,6 +96,7 @@
 }
 
 .dark {
+  --link: oklch(0.75 0.14 250);
   --chat-user: oklch(0.29 0.035 245);
   --chat-user-foreground: oklch(0.94 0.02 245);
   --background: oklch(0.145 0 0);

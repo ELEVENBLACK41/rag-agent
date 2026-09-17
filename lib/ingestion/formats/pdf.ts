@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-11 | 文件说明：VaultAgent PDF 文本层解析器与物理页定位 | edit by：Sliye
+ * 修改时间：2026-09-17 | 文件说明：VaultAgent PDF 文本层解析器与物理页定位 | edit by：Sliye
  * 
  * 把一个PDF原始字节数组转换成统一的文本Chunk 和 页级别的判断，后面Workflow负责入库/向量化，聊天模块负责引用展示
  * PDF.js读取文档
@@ -18,7 +18,7 @@ import type {
 import { getErrorMessage } from "@/lib/ingestion/errors";
 
 /** 单个 PDF 页内文本块的最大字符数，避免一页过长撑大检索上下文。 */
-const MAX_CHUNK_CHARACTERS = 1_400;
+import { MAX_CHUNK_CHARACTERS } from "@/lib/ingestion/formats/chunking-config";
 
 /**
  * 提取 PDF 文本层，并将每个文本块固定在单一物理页内。

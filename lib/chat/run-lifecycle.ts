@@ -1,10 +1,10 @@
-/** 修改时间：2026-09-16 | 文件说明：Run 的数据库锁、单调事件与不可逆终态边界 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：Run 的数据库锁、来源原子保存与不可逆终态边界 | edit by：Sliye */
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/client";
 import { conversations, messages, runEvents, runs } from "@/lib/db/schema";
 import { LOCAL_WORKSPACE_ID } from "@/lib/ingestion/imports";
-import type { AnswerCitation, ChatRun } from "@/lib/chat/types";
+import type { AnswerCitation, ChatRun, WebSource } from "@/lib/chat/types";
 import { RUN_DEADLINE_MS, RUN_EVENT_CHANNEL } from "@/lib/chat/config";
 
 /** 复用 Drizzle 的事务类型，不为持久层引入另一套接口。 */
@@ -79,11 +79,12 @@ export async function appendRunEvent(
   return sequence;
 }
 
-/** @param chatRun 固定快照的 Run。 @param answer 完整正文。 @param citations 已重新授权的来源。 */
+/** @param chatRun 固定快照的 Run。 @param answer 完整正文。 @param citations 已重新授权的本地来源。 @param webSources 从真实搜索结果中选择的网页来源，与终态原子保存。 */
 export async function completeChatRun(
   chatRun: ChatRun,
   answer: string,
   citations: AnswerCitation[],
+  webSources: WebSource[] = [],
 ) {
   const completed = await withLockedRun(chatRun.runId, async (tx, run) => {
     if (run.status !== "running") return false;
@@ -111,7 +112,7 @@ export async function completeChatRun(
       .update(runs)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(runs.id, run.id));
-    await insertRunEvent(tx, run.id, "run_completed", { citations });
+    await insertRunEvent(tx, run.id, "run_completed", { citations, webSources });
     return true;
   });
   if (!completed) throw new Error("本轮执行已结束或会话已删除。");

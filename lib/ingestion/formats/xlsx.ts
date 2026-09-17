@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-13
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent 基础 XLSX 工作表、单元格与公式缓存值解析器。
  *
  * ExcelJS 只负责读取 Office Open XML；本模块将非空单元格按工作表区域收敛为
@@ -17,7 +17,7 @@ import { ImportValidationError } from "@/lib/ingestion/errors";
 import type { ParsedDocument, ParsedTextChunk } from "@/lib/ingestion/formats/types";
 
 /** 单个 XLSX 检索块最大字符数，与其他结构化文档保持一致。 */
-const MAX_CHUNK_CHARACTERS = 1_400;
+import { MAX_CHUNK_CHARACTERS } from "@/lib/ingestion/formats/chunking-config";
 /** 一个工作簿允许的最多工作表数，防止小文件在解压后制造大量解析任务。 */
 const MAX_WORKSHEET_COUNT = 50;
 /** 单个工作表可读取的最多非空单元格数，避免稀疏表格绕过行数限制。 */

@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-12
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent 常规 DOCX 正文、标题与基础表格解析器。
  *
  * Mammoth 负责安全地读取 DOCX 容器并映射 Word 常见样式；本文件仅把稳定的
@@ -13,7 +13,7 @@ import mammoth from "mammoth";
 import type { ParsedDocument, ParsedTextChunk } from "@/lib/ingestion/formats/types";
 
 /** 单个 DOCX 检索块最大字符数，与 Markdown/PDF 的上下文上限保持一致。 */
-const MAX_CHUNK_CHARACTERS = 1_400;
+import { MAX_CHUNK_CHARACTERS } from "@/lib/ingestion/formats/chunking-config";
 
 /**
  * 将常规 DOCX 转为标题路径、段落与基础表格 Chunk。

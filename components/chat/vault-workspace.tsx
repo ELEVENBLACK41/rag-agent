@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-16 | 文件说明：持久工作区右侧的聊天展示、输入与来源抽屉组合 | edit by：Sliye */
+/** 修改时间：2026-09-17 | 文件说明：持久工作区右侧的聊天展示、联网选项与来源抽屉组合 | edit by：Sliye */
 "use client";
 import { useState } from "react";
 import { RefreshCwIcon, Trash2Icon } from "lucide-react";
@@ -105,6 +105,8 @@ export function VaultWorkspace({
           />
         )}
         <ChatComposer
+          webSearchEnabled={chat.webSearchEnabled}
+          onWebSearchChange={chat.setWebSearchEnabled}
           value={chat.input}
           onChange={chat.setInput}
           onSubmit={chat.submitQuestion}
