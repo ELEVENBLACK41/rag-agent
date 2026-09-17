@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-16
+ * 修改时间：2026-09-17
  * 文件说明：VaultAgent 导入批次的解析、视觉资产、Embedding 与发布步骤。
  *
  * 每个步骤只传递导入标识；正文、文件字节和模型上下文均在业务边界内读取，
@@ -100,34 +100,74 @@ export async function parseAndStoreChunks(
   }
   await replaceImportDiagnostics(importId, parsedDocument.diagnostics);
   const parsedChunks = parsedDocument.chunks;
-  if (!parsedChunks.length)
-    throw new FatalError("The uploaded file does not contain indexable text.");
   if (parsedChunks.length > MAX_CHUNKS_PER_FILE)
     throw new FatalError(
       `File exceeds the ${MAX_CHUNKS_PER_FILE} chunk import limit.`,
     );
 
-  await db
-    .insert(chunks)
-    .values(
-      parsedChunks.map((chunk, ordinal) => ({
-        id: randomUUID(),
-        fileVersionId: importRecord.fileVersionId,
-        snapshotId: importRecord.snapshotId,
-        ordinal,
-        content: chunk.content,
-        contentHash: createHash("sha256").update(chunk.content).digest("hex"),
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-        sourceLocator: chunk.sourceLocator,
-      })),
-    )
-    .onConflictDoNothing();
+  /** 扫描版 PDF 可合法地产生零个文本块，视觉分析步骤会在后续补充视觉 Chunk。 */
+  if (parsedChunks.length) {
+    await db
+      .insert(chunks)
+      .values(
+        parsedChunks.map((chunk, ordinal) => ({
+          id: randomUUID(),
+          fileVersionId: importRecord.fileVersionId,
+          snapshotId: importRecord.snapshotId,
+          ordinal,
+          content: chunk.content,
+          contentHash: createHash("sha256").update(chunk.content).digest("hex"),
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          sourceLocator: chunk.sourceLocator,
+        })),
+      )
+      .onConflictDoNothing();
+  }
   if (progress) {
     await updateImportBatchProgress(
       progress.batchId,
       progress.endPercent,
       "visualizing",
+    );
+  }
+}
+
+/**
+ * 在文本解析和视觉分析均完成后，确认当前快照确实有可供 Embedding 的内容。
+ *
+ * 扫描版 PDF 的文本层为空是正常情况，必须先让视觉分析有机会创建视觉 Chunk；
+ * 不能在解析步骤中提前将它标记为不可恢复的 Workflow 失败。
+ *
+ * @param importId 文件导入记录标识。
+ */
+export async function ensureImportHasIndexableChunks(importId: string) {
+  "use step";
+
+  const db = getDatabase();
+  const [importRecord] = await db
+    .select({
+      fileVersionId: imports.fileVersionId,
+      snapshotId: imports.snapshotId,
+    })
+    .from(imports)
+    .where(eq(imports.id, importId))
+    .limit(1);
+  if (!importRecord) throw new FatalError("Import record does not exist.");
+
+  const [indexableChunk] = await db
+    .select({ id: chunks.id })
+    .from(chunks)
+    .where(
+      and(
+        eq(chunks.fileVersionId, importRecord.fileVersionId),
+        eq(chunks.snapshotId, importRecord.snapshotId),
+      ),
+    )
+    .limit(1);
+  if (!indexableChunk) {
+    throw new FatalError(
+      "The uploaded file has no extractable text, and visual analysis did not produce indexable content.",
     );
   }
 }
