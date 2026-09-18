@@ -43,7 +43,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
       : {}),
     list_files: tool({
       description:
-        "仅在用户要求查看知识库文件名称、数量、清单，或具体资料任务需要先确认文件身份时调用。纯问候、寒暄、致谢不能调用，不主动给用户展示知识库。返回当前已发布快照的文件名、相对路径、格式和文件总数，不返回正文。若目标是介绍或概括文件，清单只能确定文件身份，之后仍须 search_notes 搜索并 read_sources 读取正文。已从上下文明确目标文件时可直接搜索，不必重复列清单。总数以返回值为准，每页最多 30 个；完整清单且 nextOffset 非空时在预算内继续翻页，未读全须说明范围。",
+        "仅在用户要求查看知识库文件名称、数量、清单，或具体资料任务需要先确认文件身份时调用。纯问候、寒暄、致谢不能调用，不主动给用户展示知识库。返回当前已发布快照的文件名、相对路径、格式和文件总数，不返回正文。若目标是介绍或概括文件，清单只能确定文件身份，之后仍须搜索候选并在下一步读取正文。已从上下文明确目标文件时可直接搜索，不必重复列清单。总数以返回值为准，每页最多 30 个；完整清单且 nextOffset 非空时在预算内继续翻页，未读全须说明范围。",
       inputSchema: z.object({ //z来自Zod数据校验库,这个工具接受一个对象,必须有briefing,offset
         briefing: z
           .string()
@@ -81,7 +81,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
     }),
     search_notes: tool({
       description:
-        "在当前知识库快照中搜索正文候选。介绍、概括、解释文件内容时，用已明确的文件名/路径和当前问题构造查询；当前问题承接近期对话时，必须先从对话恢复完整对象，再构造脱离上下文也可理解的完整查询，不能只搜索代词、问词或历史结论。返回候选后须通过 read_sources 获取正文。历史未获取正文不表示本轮无需尝试。问候无需调用，搜索结果不能代替完整文件清单。",
+        "在当前知识库快照中搜索正文候选。query 保留用户原意，不静默纠正疑似错词；表达可能错漏、宽泛或多义时，可在 queryVariants 提供最多两个检索假设，它们只扩展召回，不代表已确认用户意图。用户提供文件名、路径或宽泛文件描述时放入 fileHint，它只参与排序，不限制检索范围。当前问题承接近期对话时，先恢复完整对象，不能只搜索代词或历史结论。返回候选后须在下一步读取正文。",
       inputSchema: z.object({
         briefing: z
           .string()
@@ -96,10 +96,22 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
           .trim()
           .min(1)
           .max(600)
-          .describe("用于检索知识库的具体问题"),
+          .describe("保留用户原意并补全上下文后的主检索问题"),
+        queryVariants: z
+          .array(z.string().trim().min(1).max(600))
+          .max(2)
+          .optional()
+          .describe("疑似错漏或多义时的检索假设，最多两个；无合理假设时省略"),
+        fileHint: z
+          .string()
+          .trim()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("用户提供的文件名、路径或宽泛文件描述；未提供时省略"),
       }),
       strict: true,
-      execute: async ({ query }, { abortSignal }) => {
+      execute: async ({ query, queryVariants, fileHint }, { abortSignal }) => {
         await assertActive();
         if (!state.beginToolCall()) return { status: "tool-budget-exhausted" };
         if (!state.snapshotId)
@@ -108,7 +120,11 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
             message: "请先导入资料。",
             matches: [],
           };
-        const blocked = state.beginSearch(query);
+        const blocked = state.beginSearch(
+          [query, ...(queryVariants ?? []), fileHint]
+            .filter(Boolean)
+            .join("\n"),
+        );
         if (blocked)
           return {
             status: blocked,
@@ -118,7 +134,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
         const result = await retrievePublishedChunksWithTrace(
           state.snapshotId,
           query,
-          abortSignal,
+          { abortSignal, queryVariants, fileHint },
         );
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
@@ -212,7 +228,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
         const result = await retrievePublishedChunksWithTrace(
           state.snapshotId,
           truncateSourceContent(source.content),
-          abortSignal,
+          { abortSignal },
         );
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
