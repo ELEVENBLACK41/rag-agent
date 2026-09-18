@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-17 | 文件说明：多步问答执行、本地与网页证据交接及最终答案流式生成
+/** 修改时间：2026-09-18 | 文件说明：多步问答执行、本地与网页证据交接及最终答案流式生成
  * 
  *  服务端执行编排层，同时也是服务端事件流的生产者
  * 
@@ -62,7 +62,13 @@ export async function* executeChatRun(
   const context = await loadConversationContext(chatRun, question);
   const webSearch = chatRun.webSearchEnabled ? createWebSearchEvidence() : undefined;
   await recordObservation(chatRun.runId, "context", "context", { truncated: context.truncated, messageCount: context.messages.length, webSearchEnabled: chatRun.webSearchEnabled });
-  const agent = createVaultRunAgent(state, context.truncated, control.assertActive, chatRun.webSearchEnabled, createModelRecorder(chatRun.runId, "research"));
+  const agent = createVaultRunAgent(
+    state,
+    context.truncated,
+    control.assertActive,
+    chatRun.webSearchEnabled,
+    createModelRecorder(chatRun.runId, "research"),
+  );
   /** context.messages大概是
    * { role: "user", content: "上一个问题" },
    * { role: "assistant", content: "上一个回答" },
@@ -196,7 +202,13 @@ export async function* executeChatRun(
       });
     }
     if (part.type === "tool-error") {
-      await toolRecorder.finish(part.toolCallId, part.toolName, true);
+      await toolRecorder.finish(
+        part.toolCallId,
+        part.toolName,
+        true,
+        undefined,
+        part.error,
+      );
       hasToolError = true;
       yield createToolEvent({
         toolCallId: part.toolCallId,

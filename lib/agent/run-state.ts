@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-16
+ * 修改时间：2026-09-18
  * 文件说明：VaultAgent 单次多步问答的工具与证据预算状态。
  *
  * State 只在当前服务器执行内存活，固定绑定一个索引快照。它不保存模型思维过程，
@@ -62,6 +62,10 @@ export function createVaultRunState(snapshotId: string | null, options: VaultRun
     /** 在模型步骤之间退出工具循环。 */
     isToolBudgetExhausted() {
       return toolCallCount >= MAX_AGENT_TOOL_CALLS;
+    },
+    /** 返回已实际登记的搜索次数，供步骤门禁判断能否结束证据收集。 */
+    getSearchCount() {
+      return searches.size;
     },
     /** 步骤门禁隐藏预算已用尽的搜索工具。 */
     canSearch() {
