@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-17
+ * 修改时间：2026-09-18
  * 文件说明：VaultAgent DAY8 已发布快照的混合检索与重排序。
  *
  * 本模块只读取固定快照：关键词、向量、RRF 与 rerank 的每一步都返回不含正文的
@@ -43,6 +43,14 @@ import type {
 } from "@/lib/retrieval/types";
 
 export type { RetrievedChunk, RetrievalResult, RetrievalTrace } from "@/lib/retrieval/types";
+
+export type RetrievalOptions = {
+  abortSignal?: AbortSignal;
+  /** 对疑似错漏或宽泛表达的少量检索假设，不代表已确认用户意图。 */
+  queryVariants?: string[];
+  /** 用户提供的可选文件线索，只参与召回，不限制检索范围。 */
+  fileHint?: string;
+};
 
 type VectorCandidateResult = (
   | { status: "completed"; candidates: RetrievedChunk[] }
@@ -92,24 +100,29 @@ export async function retrievePublishedChunks(snapshotId: string, question: stri
  *
  * @param snapshotId 已发布且固定的索引快照标识。
  * @param question 已在 API 边界完成长度校验的用户问题。
- * @param abortSignal 调用方取消信号；取消不作为检索降级继续执行。
+ * @param options 检索取消信号及可选文件范围。
  */
 export async function retrievePublishedChunksWithTrace(
   snapshotId: string,
   question: string,
-  abortSignal?: AbortSignal,
+  options: RetrievalOptions = {},
 ): Promise<RetrievalResult> {
+  const { abortSignal, queryVariants = [], fileHint } = options;
   const startedAt = Date.now();
   let keywordMs = 0;
   let vectorMs = 0;
-  //从keyword提取出来的关键词keywordTerms
-  const keywordTerms = extractKeywordTerms(question);
+  const retrievalQueries = [question, ...queryVariants, fileHint].filter(
+    (value): value is string => Boolean(value?.trim()),
+  );
+  // 原始表达、检索假设和文件线索公平取词，避免单个长句吃满关键词预算。
+  const keywordTerms = mergeKeywordTerms(retrievalQueries);
+  const retrievalQuery = retrievalQueries.join("\n");
   const activeFileVersionIds = await getActiveSnapshotFileVersionIds(snapshotId);
   const [keywordCandidates, vectorResult] = await Promise.all([
     //关键词候选
     timedRetrieval(() => retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds), (ms) => { keywordMs = ms; }),
     //向量候选
-    timedRetrieval(() => retrieveVectorCandidates(snapshotId, question, activeFileVersionIds, abortSignal), (ms) => { vectorMs = ms; }),
+    timedRetrieval(() => retrieveVectorCandidates(snapshotId, retrievalQuery, activeFileVersionIds, abortSignal), (ms) => { vectorMs = ms; }),
   ]);
   const fusionStartedAt = Date.now();
   const allFusedCandidates = fuseWithRrf<RetrievedChunk>(
@@ -121,7 +134,11 @@ export async function retrievePublishedChunksWithTrace(
     .slice(0, RERANK_CANDIDATE_LIMIT)
     .map((candidate, index) => ({ ...candidate, fusionRank: index + 1 }));
   const fusionMs = Date.now() - fusionStartedAt;
-  const reranked = await rerankCandidates(question, fusedCandidates, abortSignal);
+  const reranked = await rerankCandidates(
+    retrievalQuery,
+    fusedCandidates,
+    abortSignal,
+  );
 
   const trace: RetrievalTrace = {
     execution: {
@@ -133,7 +150,7 @@ export async function retrievePublishedChunksWithTrace(
       fused: fusedCandidates.map((candidate, index) => ({ chunkId: candidate.chunkId, rank: index + 1, rrfScore: candidate.rrfScore ?? null })),
       final: reranked.chunks.map((candidate, index) => ({ chunkId: candidate.chunkId, rank: index + 1, rerankScore: candidate.rerankScore ?? null })),
     },
-    version: "day8-hybrid-v2-latest-file",
+    version: "hybrid-v3-query-expansion",
     keywordTerms,
     keywordCandidateIds: keywordCandidates.map((candidate) => candidate.chunkId),
     vectorCandidateIds: vectorResult.candidates.map((candidate) => candidate.chunkId),
@@ -165,14 +182,20 @@ async function retrieveKeywordCandidates(
 ): Promise<RetrievedChunk[]> {
   if (!terms.length || !activeFileVersionIds.length) return [];
 
+  const fileIdentity = sql<string>`LOWER(CONCAT(COALESCE(${logicalFiles.sourcePath}, ''), ' ', ${logicalFiles.displayName}))`;
   const matchExpressions = terms.map(
-    (term) =>
-      sql<number>`CASE WHEN POSITION(${term} IN LOWER(${chunks.content})) > 0 THEN 1 ELSE 0 END`,
+    (term) => sql<number>`(
+      CASE WHEN POSITION(${term} IN LOWER(${chunks.content})) > 0 THEN 1 ELSE 0 END
+      + CASE WHEN POSITION(${term} IN ${fileIdentity}) > 0 THEN 2 ELSE 0 END
+    )`,
   );
   const keywordScore = sql<number>`(${sql.join(matchExpressions, sql` + `)})`;
   const matchesAnyTerm = or(
     ...terms.map(
-      (term) => sql`POSITION(${term} IN LOWER(${chunks.content})) > 0`,
+      (term) => sql`(
+        POSITION(${term} IN LOWER(${chunks.content})) > 0
+        OR POSITION(${term} IN ${fileIdentity}) > 0
+      )`,
     ),
   );
   if (!matchesAnyTerm) return [];
@@ -427,6 +450,29 @@ async function getActiveSnapshotFileVersionIds(snapshotId: string) {
   }
 
   return [...latestByPath.values()];
+}
+
+/** 多个查询按位置交错合并关键词，限制 SQL 条件数量并保留各解释的召回机会。 */
+function mergeKeywordTerms(queries: string[]) {
+  const groups = queries.map(extractKeywordTerms);
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  const maxTerms = 20;
+  const longestGroup = Math.max(0, ...groups.map((group) => group.length));
+  for (
+    let index = 0;
+    index < longestGroup && merged.length < maxTerms;
+    index += 1
+  ) {
+    for (const group of groups) {
+      const term = group[index];
+      if (!term || seen.has(term)) continue;
+      seen.add(term);
+      merged.push(term);
+      if (merged.length >= maxTerms) break;
+    }
+  }
+  return merged;
 }
 
 /** 将数据库 JSON 定位字段恢复为跨格式的受限类型。 */

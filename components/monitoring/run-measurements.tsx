@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-17 | 文件说明：以表格展示真实模型、工具和逐次检索数据，不混淆排序分数与质量评分 | edit by：Sliye */
+/** 修改时间：2026-09-18 | 文件说明：以表格展示真实模型、工具和逐次检索数据，不混淆排序分数与质量评分 | edit by：Sliye */
 import { z } from "zod";
 import { formatUsd } from "@/lib/monitoring/gateway-cost";
 import {
@@ -37,6 +37,14 @@ const modelSchema = z.object({
 const toolSchema = z.object({
   toolName: z.string(),
   status: z.string(),
+  errorKind: z
+    .enum([
+      "tool-not-available",
+      "invalid-tool-input",
+      "tool-execution-error",
+    ])
+    .nullable()
+    .optional(),
   resultStatus: z.string().nullable().optional(),
   resultCount: z.number().nullable(),
   observedDurationMs: z.number().nullable(),
@@ -54,6 +62,15 @@ function numberLabel(value: number | null | undefined) {
   return value == null
     ? "未采集"
     : value.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
+}
+
+/** 将脱敏错误类别转换为管理页可理解的原因，不展示 SDK 原始异常。 */
+function toolResultLabel(tool: z.infer<typeof toolSchema>) {
+  if (tool.resultStatus) return tool.resultStatus;
+  if (tool.errorKind === "tool-not-available") return "工具当步不可用";
+  if (tool.errorKind === "invalid-tool-input") return "工具参数无效";
+  if (tool.errorKind === "tool-execution-error") return "工具执行异常";
+  return "—";
 }
 
 /** @param detail 已鉴权的当前 Run 记录。 */
@@ -158,7 +175,7 @@ export function RunMeasurements({
                         ? "失败"
                         : "已开始"}
                   </TableCell>
-                  <TableCell>{tool.resultStatus ?? "—"}</TableCell>
+                  <TableCell>{toolResultLabel(tool)}</TableCell>
                   <TableCell>{numberLabel(tool.resultCount)}</TableCell>
                   <TableCell>
                     {durationLabel(tool.observedDurationMs)}
