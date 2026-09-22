@@ -10,6 +10,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "eval:prepare": "node evals/classic/prepare.mjs",
+    "eval:import": "node evals/classic/import.mjs",
+    "eval:run": "node --env-file=.env.local --experimental-transform-types --loader ./evals/ts-loader.mjs evals/run.mjs",
+    "eval:check": "node --test evals/scoring.test.mjs",
+    "eval:compare": "node evals/compare.mjs",
+    "eval:review": "node --experimental-transform-types --loader ./evals/ts-loader.mjs evals/review.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },

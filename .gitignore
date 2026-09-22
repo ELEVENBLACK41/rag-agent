@@ -1,3 +1,4 @@
+# 修改时间：2026-09-22 | 文件说明：忽略本地私有运行数据和固定评测生成报告 | edit by：Sliye
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
@@ -21,6 +22,9 @@
 # production
 /build
 /data/
+/evals/reports/
+/evals/classic/corpus/
+/evals/classic/reviews.local.json
 
 # misc
 .DS_Store
@@ -44,6 +48,5 @@ yarn-error.log*
 next-env.d.ts
 /.swc
 
-/doc/
 /.pnpm-store/
 /data/

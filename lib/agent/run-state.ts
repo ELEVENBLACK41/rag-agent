@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-18
+ * 修改时间：2026-09-22
  * 文件说明：VaultAgent 单次多步问答的工具与证据预算状态。
  *
  * State 只在当前服务器执行内存活，固定绑定一个索引快照。它不保存模型思维过程，
@@ -22,6 +22,8 @@ export const MAX_SOURCE_CHARACTERS = 2_400;
 
 export type VaultRunStateOptions = {
   onRetrievalTrace: (trace: RetrievalTrace) => Promise<void>;
+  /** 离线评测本轮检索配置；普通 Run 不传。 */
+  retrievalTuning?: Partial<RetrievalTrace["config"]>;
 };
 
 /** 创建一个只属于当前 Run 的受限工具执行状态。 */
@@ -36,6 +38,7 @@ export function createVaultRunState(snapshotId: string | null, options: VaultRun
 
   return {
     snapshotId,
+    retrievalTuning: options.retrievalTuning,
     /** @param offset 已成功查询的文件列表起点，不把列表条目授权为正文片段。 */
     recordFileList(offset: number) {
       fileListOffsets.add(offset);

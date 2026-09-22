@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-18
+ * 修改时间：2026-09-22
  * 文件说明：VaultAgent DAY8 跨格式检索结果与可审计 Trace 类型。
  *
  * edit by：Sliye
@@ -31,6 +31,8 @@ export type RerankTrace =
       durationMs: number;
       inputChunkIds: string[];
       outputChunkIds: string[];
+      /** Gateway 当前请求实报 USD；未返回时为 null。 */
+      costUsd?: number | null;
     }
   | {
       status: "fallback";
@@ -46,7 +48,7 @@ export type RetrievalTrace = {
   execution?: {
     queryId: string; snapshotId: string; durationMs: number;
     keywordMs: number; vectorMs: number; fusionMs: number; fusedUniqueCount: number;
-    embedding: { modelId: string; status: "completed" | "failed"; durationMs: number; tokens: number | null } | null;
+    embedding: { modelId: string; status: "completed" | "failed"; durationMs: number; tokens: number | null; costUsd?: number | null } | null;
     keyword: Array<{ chunkId: string; rank: number }>;
     vector: Array<{ chunkId: string; rank: number; similarity: number | null }>;
     fused: Array<{ chunkId: string; rank: number; rrfScore: number | null }>;

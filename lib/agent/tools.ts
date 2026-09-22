@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-18
+ * 修改时间：2026-09-22
  * 文件说明：知识库与获准联网搜索工具的统一注册入口。
  *
  * 本地工具只访问当前 Run 固定快照，且读取前必须来自本次搜索候选。
@@ -134,7 +134,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
         const result = await retrievePublishedChunksWithTrace(
           state.snapshotId,
           query,
-          { abortSignal, queryVariants, fileHint },
+          { abortSignal, queryVariants, fileHint, tuning: state.retrievalTuning },
         );
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));
@@ -228,7 +228,7 @@ export function createVaultTools(state: VaultRunState, assertActive: () => Promi
         const result = await retrievePublishedChunksWithTrace(
           state.snapshotId,
           truncateSourceContent(source.content),
-          { abortSignal },
+          { abortSignal, tuning: state.retrievalTuning },
         );
         await state.recordRetrievalTrace(result.trace);
         state.permitChunks(result.chunks.map((chunk) => chunk.chunkId));

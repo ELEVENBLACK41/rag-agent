@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-17 | 文件说明：管理指标口径和采集覆盖目录，未实现项明确标注 | edit by：Sliye */
+/** 修改时间：2026-09-22 | 文件说明：管理指标口径和固定评测采集覆盖目录 | edit by：Sliye */
 export const metricCatalog = [
   {
     group: "当前配置",
@@ -58,10 +58,10 @@ export const metricCatalog = [
   },
   {
     group: "质量评测",
-    source: "版本化评测报告（D15 接入执行器）",
+    source: "版本化固定集评测报告",
     unit: "Recall@K、Precision@K、MRR、nDCG、任务成功率",
     meaning:
       "只有标注范围、证据粒度和评分版本一致才比较；最终 Top 6 不冒充 @10",
-    missing: "当前尚无标准集和评测报告，全部显示未评测；来源数量不代表正确率",
+    missing: "执行前或缺少人工复核时显示未评测；字面事实不能代替语义任务成功，Gateway 未实报的费用留空",
   },
 ] as const;

@@ -1,46 +1,12 @@
-/** 修改时间：2026-09-17 | 文件说明：版本化离线评测报告的所有者读取与格式校验 | edit by：Sliye */
+/** 修改时间：2026-09-22 | 文件说明：版本化离线评测报告的所有者读取与格式校验 | edit by：Sliye */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 import { isOwner } from "@/lib/auth/owner";
+import { evaluationReportSchema, reportIdSchema } from "@/lib/monitoring/evaluation-report-schema";
+export { evaluationReportSchema, reportIdSchema } from "@/lib/monitoring/evaluation-report-schema";
 
 /** 固定目录，D15 执行器写入；请求不能指定磁盘路径。 */
 const REPORT_DIRECTORY = path.join(process.cwd(), "evals", "reports");
-/** 安全的报告文件名。 */
-export const reportIdSchema = z
-  .string()
-  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/);
-/** 未评分为 null，不能以零代替；评分来源、分子分母与版本都显式保存。 */
-export const evaluationReportSchema = z.object({
-  version: z.literal("evaluation-report-v1"),
-  id: reportIdSchema,
-  createdAt: z.string().datetime(),
-  datasetVersion: z.string().min(1),
-  corpusHash: z.string().min(1),
-  scorerVersion: z.string().min(1),
-  configurationHash: z.string().min(1),
-  promptHash: z.string().min(1),
-  cases: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        runId: z.string().uuid().nullable(),
-        status: z.enum(["passed", "failed", "unscored", "not-applicable"]),
-        metrics: z.record(
-          z.string(),
-          z.object({
-            value: z.number().nullable(),
-            numerator: z.number().nullable(),
-            denominator: z.number().nullable(),
-            unit: z.string(),
-            source: z.enum(["deterministic", "human", "model"]),
-          }),
-        ),
-        explanation: z.string().max(4000),
-      }),
-    )
-    .max(1000),
-});
 
 /** @param id 报告标识。大小和格式错误显式失败，不伪装为空报告。 */
 export async function readEvaluationReport(id: string) {

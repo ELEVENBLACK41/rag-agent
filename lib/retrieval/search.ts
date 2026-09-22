@@ -1,5 +1,5 @@
 /**
- * 修改时间：2026-09-18
+ * 修改时间：2026-09-22
  * 文件说明：VaultAgent DAY8 已发布快照的混合检索与重排序。
  *
  * 本模块只读取固定快照：关键词、向量、RRF 与 rerank 的每一步都返回不含正文的
@@ -25,6 +25,7 @@ import {
   RRF_RANK_CONSTANT,
 } from "@/lib/retrieval/config";
 import { getDatabase } from "@/lib/db/client";
+import { readGatewayCost } from "@/lib/monitoring/gateway-cost";
 import {
   chunks,
   fileVersions,
@@ -50,6 +51,8 @@ export type RetrievalOptions = {
   queryVariants?: string[];
   /** 用户提供的可选文件线索，只参与召回，不限制检索范围。 */
   fileHint?: string;
+  /** 离线评测覆盖值；普通问答不传时使用生产常量。 */
+  tuning?: Partial<RetrievalTrace["config"]>;
 };
 
 type VectorCandidateResult = (
@@ -108,6 +111,16 @@ export async function retrievePublishedChunksWithTrace(
   options: RetrievalOptions = {},
 ): Promise<RetrievalResult> {
   const { abortSignal, queryVariants = [], fileHint } = options;
+  /** 本次检索实际使用的参数，写入 Trace 供离线报告核对。 */
+  const config: RetrievalTrace["config"] = {
+    keywordCandidateLimit: RETRIEVAL_CANDIDATE_LIMIT,
+    vectorCandidateLimit: RETRIEVAL_CANDIDATE_LIMIT,
+    rerankCandidateLimit: RERANK_CANDIDATE_LIMIT,
+    finalLimit: FINAL_RETRIEVAL_LIMIT,
+    rrfRankConstant: RRF_RANK_CONSTANT,
+    rerankTimeoutMs: RERANK_TIMEOUT_MS,
+    ...options.tuning,
+  };
   const startedAt = Date.now();
   let keywordMs = 0;
   let vectorMs = 0;
@@ -120,23 +133,24 @@ export async function retrievePublishedChunksWithTrace(
   const activeFileVersionIds = await getActiveSnapshotFileVersionIds(snapshotId);
   const [keywordCandidates, vectorResult] = await Promise.all([
     //关键词候选
-    timedRetrieval(() => retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds), (ms) => { keywordMs = ms; }),
+    timedRetrieval(() => retrieveKeywordCandidates(snapshotId, keywordTerms, activeFileVersionIds, config.keywordCandidateLimit), (ms) => { keywordMs = ms; }),
     //向量候选
-    timedRetrieval(() => retrieveVectorCandidates(snapshotId, retrievalQuery, activeFileVersionIds, abortSignal), (ms) => { vectorMs = ms; }),
+    timedRetrieval(() => retrieveVectorCandidates(snapshotId, retrievalQuery, activeFileVersionIds, config.vectorCandidateLimit, abortSignal), (ms) => { vectorMs = ms; }),
   ]);
   const fusionStartedAt = Date.now();
   const allFusedCandidates = fuseWithRrf<RetrievedChunk>(
     keywordCandidates,
     vectorResult.candidates,
-    RRF_RANK_CONSTANT,
+    config.rrfRankConstant,
   );
   const fusedCandidates = allFusedCandidates
-    .slice(0, RERANK_CANDIDATE_LIMIT)
+    .slice(0, config.rerankCandidateLimit)
     .map((candidate, index) => ({ ...candidate, fusionRank: index + 1 }));
   const fusionMs = Date.now() - fusionStartedAt;
   const reranked = await rerankCandidates(
     retrievalQuery,
     fusedCandidates,
+    config,
     abortSignal,
   );
 
@@ -156,14 +170,7 @@ export async function retrievePublishedChunksWithTrace(
     vectorCandidateIds: vectorResult.candidates.map((candidate) => candidate.chunkId),
     fusedCandidateIds: fusedCandidates.map((candidate) => candidate.chunkId),
     finalChunkIds: reranked.chunks.map((candidate) => candidate.chunkId),
-    config: {
-      keywordCandidateLimit: RETRIEVAL_CANDIDATE_LIMIT,
-      vectorCandidateLimit: RETRIEVAL_CANDIDATE_LIMIT,
-      rerankCandidateLimit: RERANK_CANDIDATE_LIMIT,
-      finalLimit: FINAL_RETRIEVAL_LIMIT,
-      rrfRankConstant: RRF_RANK_CONSTANT,
-      rerankTimeoutMs: RERANK_TIMEOUT_MS,
-    },
+    config,
     vectorStatus: vectorResult.status,
     ...(vectorResult.status === "fallback"
       ? { vectorFallbackReason: vectorResult.reason }
@@ -174,11 +181,18 @@ export async function retrievePublishedChunksWithTrace(
   return { chunks: reranked.chunks, trace };
 }
 
-/** 使用中文双字词/短语和拉丁关键词检索候选。 */
+/**
+ * 使用中文双字词/短语和拉丁关键词检索候选。
+ * @param snapshotId 固定的已发布快照。
+ * @param terms 已提取的有限关键词。
+ * @param activeFileVersionIds 当前快照生效的文件版本。
+ * @param limit 本轮配置的关键词候选上限。
+ */
 async function retrieveKeywordCandidates(
   snapshotId: string,
   terms: string[],
   activeFileVersionIds: string[],
+  limit: number,
 ): Promise<RetrievedChunk[]> {
   if (!terms.length || !activeFileVersionIds.length) return [];
 
@@ -216,16 +230,24 @@ async function retrieveKeywordCandidates(
     .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id))
     .where(publishedChunkScope(snapshotId, activeFileVersionIds, matchesAnyTerm))
     .orderBy(desc(keywordScore), chunks.id)
-    .limit(RETRIEVAL_CANDIDATE_LIMIT);
+    .limit(limit);
 
   return rows.map((row) => ({ ...toRetrievedChunk(row), similarity: null }));
 }
 
-/** 生成查询向量并检索语义相近的候选；失败时让关键词路径独立完成。 */
+/**
+ * 生成查询向量并检索语义相近的候选；失败时让关键词路径独立完成。
+ * @param snapshotId 固定的已发布快照。
+ * @param question 本轮检索文本。
+ * @param activeFileVersionIds 当前快照生效的文件版本。
+ * @param limit 本轮配置的向量候选上限。
+ * @param abortSignal 用户取消信号。
+ */
 async function retrieveVectorCandidates(
   snapshotId: string,
   question: string,
   activeFileVersionIds: string[],
+  limit: number,
   abortSignal?: AbortSignal,
 ): Promise<VectorCandidateResult> {
   let embeddingTrace: NonNullable<RetrievalTrace["execution"]>["embedding"] = null;
@@ -240,12 +262,12 @@ async function retrieveVectorCandidates(
     // 官方：https://ai-sdk.dev/docs/reference/ai-sdk-core/embed；取消传播到查询向量请求。
     abortSignal?.throwIfAborted();
     embeddingStartedAt = Date.now();
-    const { embedding, usage } = await embed({
+    const { embedding, usage, providerMetadata } = await embed({
       abortSignal,
       model: gateway.embeddingModel(EMBEDDING_MODEL), // 使用 Gateway Embedding 模型
       value: question, // 用户问题文本,用户的问题文本只向量化一次，所以不会用到embedMany
     });
-    embeddingTrace = { modelId: EMBEDDING_MODEL, status: "completed", durationMs: Date.now() - embeddingStartedAt, tokens: usage.tokens ?? null };
+    embeddingTrace = { modelId: EMBEDDING_MODEL, status: "completed", durationMs: Date.now() - embeddingStartedAt, tokens: usage.tokens ?? null, costUsd: readGatewayCost(providerMetadata).costUsd };
     if (
       embedding.length !== EMBEDDING_DIMENSIONS ||
       embedding.some((value) => !Number.isFinite(value))
@@ -277,7 +299,7 @@ async function retrieveVectorCandidates(
       .innerJoin(logicalFiles, eq(fileVersions.logicalFileId, logicalFiles.id)) //连接逻辑文件表
       .where(publishedChunkScope(snapshotId, activeFileVersionIds, isNotNull(chunks.embedding)))
       .orderBy(distance) //按距离升序排列，距离越小，相似度越高
-      .limit(RETRIEVAL_CANDIDATE_LIMIT);
+      .limit(limit);
     return {
       status: "completed" as const,
       embedding: embeddingTrace,
@@ -297,10 +319,17 @@ async function retrieveVectorCandidates(
   }
 }
 
-/** 只把 RRF 的有限候选交给 Gateway rerank；异常、限流或超时均回退原顺序。 */
+/**
+ * 只把 RRF 的有限候选交给 Gateway rerank；异常、限流或超时均回退原顺序。
+ * @param question 本轮查询文本。
+ * @param candidates 融合候选。
+ * @param config 本轮生效的排名与超时参数。
+ * @param abortSignal 用户取消信号。
+ */
 async function rerankCandidates(
   question: string,
   candidates: RetrievedChunk[],
+  config: RetrievalTrace["config"],
   abortSignal?: AbortSignal,
 ): Promise<RerankExecution> {
   abortSignal?.throwIfAborted();
@@ -318,7 +347,7 @@ async function rerankCandidates(
     };
   }
   if (!process.env.AI_GATEWAY_API_KEY) {
-    return fallbackToFusion(candidates, inputChunkIds, 0, "未配置 AI_GATEWAY_API_KEY。");
+    return fallbackToFusion(candidates, inputChunkIds, 0, "未配置 AI_GATEWAY_API_KEY。", config.finalLimit);
   }
 
   const startedAt = Date.now();
@@ -328,9 +357,9 @@ async function rerankCandidates(
       model: gateway.rerankingModel(RERANK_MODEL),
       documents: candidates.map((candidate) => candidate.content),//候选 Chunk 正文
       query: question,//用户问题
-      topN: FINAL_RETRIEVAL_LIMIT,
+      topN: config.finalLimit,
       maxRetries: 0,
-      abortSignal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(RERANK_TIMEOUT_MS)]) : AbortSignal.timeout(RERANK_TIMEOUT_MS),
+      abortSignal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(config.rerankTimeoutMs)]) : AbortSignal.timeout(config.rerankTimeoutMs),
     });
     const rerankedChunks: RetrievedChunk[] = [];
     for (const ranking of result.ranking) {
@@ -343,6 +372,7 @@ async function rerankCandidates(
         inputChunkIds,
         Date.now() - startedAt,
         "rerank 未返回有效排序。",
+        config.finalLimit,
       );
     }
     return {
@@ -353,6 +383,7 @@ async function rerankCandidates(
         durationMs: Date.now() - startedAt,
         inputChunkIds,
         outputChunkIds: rerankedChunks.map((candidate) => candidate.chunkId),
+        costUsd: readGatewayCost(result.providerMetadata).costUsd,
       },
     };
   } catch (error) {
@@ -362,19 +393,28 @@ async function rerankCandidates(
       inputChunkIds,
       Date.now() - startedAt,
       getSafeRetrievalError(error),
+      config.finalLimit,
     );
   }
 }
 
-/** 将 RRF 前列直接作为最终证据，明确记录这不是 rerank 成功。 */
+/**
+ * 将 RRF 前列直接作为最终证据，明确记录这不是 rerank 成功。
+ * @param candidates 融合候选。
+ * @param inputChunkIds 已提交 rerank 的候选标识。
+ * @param durationMs 失败前耗时。
+ * @param reason 脱敏降级原因。
+ * @param finalLimit 本轮最终证据数量上限。
+ */
 function fallbackToFusion(
   candidates: RetrievedChunk[],
   inputChunkIds: string[],
   durationMs: number,
   reason: string,
+  finalLimit: number,
 ): RerankExecution {
   return {
-    chunks: candidates.slice(0, FINAL_RETRIEVAL_LIMIT),
+    chunks: candidates.slice(0, finalLimit),
     trace: {
       status: "fallback" as const,
       modelId: RERANK_MODEL,

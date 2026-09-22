@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-17 | 文件说明：评测尚未执行时的真实管理状态，执行与报告接入归属 D15 | edit by：Sliye */
+/** 修改时间：2026-09-22 | 文件说明：固定评测报告列表与尚未执行时的真实状态 | edit by：Sliye */
 import { isOwner } from "@/lib/auth/owner";
 import { MonitorPanel } from "@/components/monitoring/monitor-panel";
 import Link from "next/link";
@@ -12,11 +12,10 @@ export default async function ReportsPage() {
   return (
     <MonitorPanel title="评测报告">
       <p className="text-sm leading-7">
-        尚未评测。当前没有标准评测集、执行器或已生成报告。
+        尚未评测。固定 60 题数据集和命令行执行器已就绪，当前没有已生成报告。
       </p>
       <p className="mt-2 text-sm leading-7 text-muted-foreground">
-        固定评测命令、报告存储与基线对比安排在
-        D15。运行监控数据可用于排查耗时与失败，但不能据此计算回答正确率或检索召回率。
+        按 evals/classic/README.md 准备独立快照后运行 pnpm eval:run。没有完整证据标注的普通聊天 Run 不能据此计算召回率。
       </p>
     </MonitorPanel>
   );

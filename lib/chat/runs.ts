@@ -1,4 +1,4 @@
-/** 修改时间：2026-09-18 | 文件说明：多步问答执行、本地与网页证据交接及最终答案流式生成
+/** 修改时间：2026-09-22 | 文件说明：多步问答执行、本地与网页证据交接及最终答案流式生成
  * 
  *  服务端执行编排层，同时也是服务端事件流的生产者
  * 
@@ -30,6 +30,7 @@ import type {
   ChatRun,
   ChatStreamEvent,
 } from "@/lib/chat/types";
+import type { RetrievalTrace } from "@/lib/retrieval/types";
 /** 已脱敏的领域错误，可跨执行边界展示；SDK 原始异常不得直接返回客户端。 */
 export class ChatExecutionError extends Error {}
 
@@ -41,7 +42,7 @@ export class ChatExecutionError extends Error {}
  *
  * @param chatRun 已持久化的单轮问答 Run。
  * @param question 已保存的用户问题。
- * @param control 服务端取消信号及工具执行前的持久状态检查。
+ * @param control 服务端取消信号、工具执行前检查及离线评测参数。
  *
  * async function* 很关键，它是一个异步生成器，可以不断的产生事件返回给前端
  * yield 阶段消息
@@ -52,11 +53,12 @@ export class ChatExecutionError extends Error {}
 export async function* executeChatRun(
   chatRun: ChatRun,
   question: string,
-  control: { signal: AbortSignal; assertActive: () => Promise<void> },
+  control: { signal: AbortSignal; assertActive: () => Promise<void>; retrievalTuning?: Partial<RetrievalTrace["config"]> },
 ): AsyncGenerator<ChatStreamEvent> {
   await recordObservation(chatRun.runId, "configuration", "configuration", getEffectiveConfiguration());
   const state = createVaultRunState(chatRun.snapshotId, {
     onRetrievalTrace: async (trace) => { await appendRunEvent(chatRun.runId, "retrieval_trace", trace); },
+    retrievalTuning: control.retrievalTuning,
   });
   /** 两个模型阶段共享相同的最近完整对话，本轮问题只追加一次。 */
   const context = await loadConversationContext(chatRun, question);

@@ -1,0 +1,20 @@
+# 修改时间：2026-09-22 | 文件说明：固定评测专用 PostgreSQL，端口和数据卷与日常开发隔离 | edit by：Sliye
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: vaultagent_eval
+      POSTGRES_USER: vaultagent
+      POSTGRES_PASSWORD: vaultagent_dev
+    ports:
+      - "5544:5432"
+    volumes:
+      - classic_eval_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vaultagent -d vaultagent_eval"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  classic_eval_postgres:
